@@ -21,6 +21,21 @@ import warnings
 warnings.filterwarnings('ignore', category=FutureWarning, message='.*Setting an item of incompatible dtype.*')
 
 
+def _contiguous_true_runs(mask: np.ndarray):
+    """Yield (start, end) index pairs for contiguous True runs in a boolean mask."""
+    if mask.size == 0:
+        return
+    edges = np.diff(mask.astype(np.int8))
+    starts = np.flatnonzero(edges == 1) + 1
+    ends = np.flatnonzero(edges == -1) + 1
+    if mask[0]:
+        starts = np.r_[0, starts]
+    if mask[-1]:
+        ends = np.r_[ends, mask.size]
+    for s, e in zip(starts, ends):
+        yield int(s), int(e)
+
+
 def apply_butterworth_lowpass(data_array: np.ndarray, 
                               sampling_rate: float,
                               cutoff_hz: float, 
@@ -52,11 +67,31 @@ def apply_butterworth_lowpass(data_array: np.ndarray,
     normalized_cutoff = cutoff_hz / nyquist
     b, a = signal.butter(order, normalized_cutoff, btype='low')
     
-    # Apply filter using forward-backward filtering (filtfilt)
-    # This gives zero phase distortion and doubles the filter order
-    filtered_data = signal.filtfilt(b, a, data_array)
-    
-    return filtered_data
+    # Handle NaNs robustly by filtering contiguous finite segments only.
+    # Running filtfilt on arrays containing NaN can propagate NaNs widely.
+    x = np.asarray(data_array, dtype=np.float64)
+    filtered = x.copy()
+    finite_mask = np.isfinite(x)
+
+    # If no NaNs, fast path on whole array.
+    if finite_mask.all():
+        return signal.filtfilt(b, a, x)
+
+    # filtfilt's default padding requirement.
+    padlen = 3 * max(len(a), len(b))
+
+    for start, end in _contiguous_true_runs(finite_mask):
+        seg = x[start:end]
+        # Segment too short for stable filtfilt: keep original values.
+        if seg.size <= padlen:
+            continue
+        try:
+            filtered[start:end] = signal.filtfilt(b, a, seg)
+        except ValueError:
+            # Be conservative: preserve original segment when filtering fails.
+            continue
+
+    return filtered.astype(data_array.dtype, copy=False)
 
 
 def filter_sweep_data(df_sweep: pd.DataFrame, 
@@ -203,7 +238,12 @@ def apply_lowpass_filter_to_bundle(bundle_dir: str,
         )
         # Convert filtered values to match the column's original dtype (avoid pandas FutureWarning)
         original_dtype = df_mv_filtered['value'].dtype
-        df_mv_filtered.loc[mask, 'value'] = filtered_vals.astype(original_dtype)
+        # Use .values assignment to bypass pandas dtype checking
+        df_mv_filtered.loc[mask, 'value'] = pd.Series(
+            filtered_vals.astype(original_dtype),
+            index=df_sweep.index
+        )
+        
         
         if verbose and sweep_id % max(1, n_sweeps_mv // 10) == 0:
             print(f"    Progress: Sweep {sweep_id}/{n_sweeps_mv} (fs={fs_sweep} Hz)...")
@@ -248,10 +288,13 @@ def apply_lowpass_filter_to_bundle(bundle_dir: str,
             fs_sweep,
             cutoff_hz
         )
-        # Convert filtered values to match the column's original dtype
+        # Convert filtered values to match the column's original dtype (avoid pandas FutureWarning)
         original_dtype = df_pa_filtered['value'].dtype
-        df_pa_filtered.loc[mask, 'value'] = filtered_vals.astype(original_dtype)
-        
+        # Use .values assignment to bypass pandas dtype checking
+        df_pa_filtered.loc[mask, 'value'] = pd.Series(
+            filtered_vals.astype(original_dtype),
+            index=df_sweep.index
+        )
         if verbose and sweep_id % max(1, n_sweeps_pa // 10) == 0:
             print(f"    Progress: Sweep {sweep_id}/{n_sweeps_pa} (fs={fs_sweep} Hz)...")
     

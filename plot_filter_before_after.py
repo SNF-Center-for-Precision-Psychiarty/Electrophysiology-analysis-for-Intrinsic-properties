@@ -129,7 +129,7 @@ def plot_sweep_comparison(sweep_data_raw, sweep_data_filtered, sweep_num, fs, ti
     ax1 = axes[0]
     ax1.plot(time_ms, sweep_data_raw, 'r-', alpha=0.7, linewidth=0.8, label='Before filter (raw)')
     ax1.set_ylabel('Amplitude', fontsize=10)
-    ax1.set_title('1️⃣ Full Trace - Raw Data (WITH NOISE)', fontsize=11, fontweight='bold')
+    ax1.set_title('1) Full Trace - Raw Data (WITH NOISE)', fontsize=11, fontweight='bold')
     ax1.grid(True, alpha=0.3)
     ax1.legend(fontsize=9)
     ax1.set_xlim([0, duration * 1000])
@@ -143,7 +143,7 @@ def plot_sweep_comparison(sweep_data_raw, sweep_data_filtered, sweep_num, fs, ti
     ax2 = axes[1]
     ax2.plot(time_ms, sweep_data_filtered, 'b-', alpha=0.7, linewidth=0.8, label='After filter (clean)')
     ax2.set_ylabel('Amplitude', fontsize=10)
-    ax2.set_title('2️⃣ Full Trace - Filtered Data (NOISE REMOVED)', fontsize=11, fontweight='bold')
+    ax2.set_title('2) Full Trace - Filtered Data (NOISE REMOVED)', fontsize=11, fontweight='bold')
     ax2.grid(True, alpha=0.3)
     ax2.legend(fontsize=9)
     ax2.set_xlim([0, duration * 1000])
@@ -170,12 +170,12 @@ def plot_sweep_comparison(sweep_data_raw, sweep_data_filtered, sweep_num, fs, ti
     ax3.plot(window_time, window_filtered, 'b-', alpha=0.8, linewidth=1.5, label='After filter')
     ax3.set_xlabel('Time (ms)', fontsize=10)
     ax3.set_ylabel('Amplitude', fontsize=10)
-    ax3.set_title(f'3️⃣ Zoomed Window ({window_duration_ms} ms) - Noise is Small but Present', fontsize=11, fontweight='bold')
+    ax3.set_title(f'3) Zoomed Window ({window_duration_ms} ms) - Noise is Small but Present', fontsize=11, fontweight='bold')
     ax3.grid(True, alpha=0.3)
     ax3.legend(fontsize=9)
     
     # Add note
-    ax3.text(0.02, 0.95, 'If traces look nearly identical:\n✅ Your data is already clean!\nNoise is small (0.1-5% of signal)\nBut filter still removes it.',
+    ax3.text(0.02, 0.95, 'If traces look nearly identical:\n[OK] Your data is already clean!\nNoise is small (0.1-5% of signal)\nBut filter still removes it.',
             transform=ax3.transAxes, fontsize=8.5, verticalalignment='top',
             bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.7))
     
@@ -327,7 +327,7 @@ def main():
         output_dir.mkdir(exist_ok=True)
         output_file1 = output_dir / f'voltage_before_after_sweep_{sweep_to_plot}.jpeg'
         fig1.savefig(output_file1, dpi=150, bbox_inches='tight')
-        print(f"✓ Saved: {output_file1.name}")
+        print(f"Saved: {output_file1.name}")
         plt.close(fig1)
         del fig1
         gc.collect()
@@ -337,7 +337,7 @@ def main():
                                         fs=sampling_rate, title_prefix='VOLTAGE (mV)', cutoff_hz=cutoff_hz)
         output_file2 = output_dir / f'voltage_spectrum_before_after_sweep_{sweep_to_plot}.jpeg'
         fig2.savefig(output_file2, dpi=150, bbox_inches='tight')
-        print(f"✓ Saved: {output_file2.name}")
+        print(f"Saved: {output_file2.name}")
         plt.close(fig2)
         del fig2
         gc.collect()
@@ -360,7 +360,7 @@ def main():
                                     fs=sampling_rate, title_prefix='CURRENT (pA)', cutoff_hz=cutoff_hz)
         output_file3 = output_dir / f'current_before_after_sweep_{sweep_to_plot}.jpeg'
         fig3.savefig(output_file3, dpi=150, bbox_inches='tight')
-        print(f"✓ Saved: {output_file3.name}")
+        print(f"Saved: {output_file3.name}")
         plt.close(fig3)
         del fig3
         gc.collect()
@@ -370,7 +370,7 @@ def main():
                                         fs=sampling_rate, title_prefix='CURRENT (pA)', cutoff_hz=cutoff_hz)
         output_file4 = output_dir / f'current_spectrum_before_after_sweep_{sweep_to_plot}.jpeg'
         fig4.savefig(output_file4, dpi=150, bbox_inches='tight')
-        print(f"✓ Saved: {output_file4.name}")
+        print(f"Saved: {output_file4.name}")
         plt.close(fig4)
         del fig4
         gc.collect()
@@ -390,9 +390,9 @@ def main():
         print(f"  4. Current frequency spectrum (before vs after)")
         print(f"\nAll files saved to: {output_dir}")
         print(f"\nWhat to look for:")
-        print(f"  • Time domain: RED wiggly line (noise) vs BLUE smooth line (clean signal)")
-        print(f"  • Frequency: RED line high above {cutoff_hz/1000:.1f} kHz, BLUE line drops off")
-        print(f"  • Zoomed window: Clear difference between noisy and filtered signal")
+        print(f"  - Time domain: RED wiggly line (noise) vs BLUE smooth line (clean signal)")
+        print(f"  - Frequency: RED line high above {cutoff_hz/1000:.1f} kHz, BLUE line drops off")
+        print(f"  - Zoomed window: Clear difference between noisy and filtered signal")
         
     except Exception as e:
         print(f"\nERROR: {e}")
