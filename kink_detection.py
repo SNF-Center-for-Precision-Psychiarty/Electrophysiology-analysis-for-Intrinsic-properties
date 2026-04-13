@@ -232,6 +232,46 @@ def measure_kink_metrics(dvdt_array, times_array, threshold_idx, debug=False):
     return result
 
 # -----------------------------
+
+
+def should_skip_kink_detection_struggling_cell(spike_amplitudes, current_spike_index, amplitude_threshold_percent=60):
+    """
+    Determine if this spike should be skipped from kink detection because the cell is struggling.
+    
+    Args:
+        spike_amplitudes: List of spike amplitudes in the sweep (V_peak - V_threshold)
+        current_spike_index: Index of current spike in the list
+        amplitude_threshold_percent: Skip if spike is <60% of median amplitude
+    
+    Returns:
+        True if spike should be skipped (cell struggling), False otherwise
+    """
+    
+    # Need at least 3 spikes to establish a trend
+    if len(spike_amplitudes) < 3:
+        return False
+    
+    # Calculate median amplitude of all spikes in sweep (robust to outliers)
+    median_amplitude = np.median(spike_amplitudes)
+    
+    # Get current spike amplitude
+    current_amplitude = spike_amplitudes[current_spike_index]
+    
+    # Check if this spike is in the last 10% of sweep and is significantly smaller
+    last_spike_fraction = 0.1
+    last_spike_index = int(len(spike_amplitudes) * (1 - last_spike_fraction))
+    
+    # Only apply struggling detection to last 10% of spikes (more conservative)
+    if current_spike_index >= last_spike_index:
+        amplitude_ratio = current_amplitude / median_amplitude
+        
+        # Skip if amplitude is <threshold percent of median (cell struggling)
+        if amplitude_ratio < (amplitude_threshold_percent / 100):
+            return True
+    
+    return False
+
+
 # Wrapper for full spike
 # -----------------------------
 def measure_kink_for_spike(voltages, times, dvdt, debug=False):

@@ -15,6 +15,10 @@ import numpy as np
 from scipy import signal
 import json
 from pathlib import Path
+import warnings
+
+# Suppress pandas FutureWarning about dtype compatibility during filtering
+warnings.filterwarnings('ignore', category=FutureWarning, message='.*Setting an item of incompatible dtype.*')
 
 
 def apply_butterworth_lowpass(data_array: np.ndarray, 
@@ -197,7 +201,9 @@ def apply_lowpass_filter_to_bundle(bundle_dir: str,
             fs_sweep,
             cutoff_hz
         )
-        df_mv_filtered.loc[mask, 'value'] = filtered_vals
+        # Convert filtered values to match the column's original dtype (avoid pandas FutureWarning)
+        original_dtype = df_mv_filtered['value'].dtype
+        df_mv_filtered.loc[mask, 'value'] = filtered_vals.astype(original_dtype)
         
         if verbose and sweep_id % max(1, n_sweeps_mv // 10) == 0:
             print(f"    Progress: Sweep {sweep_id}/{n_sweeps_mv} (fs={fs_sweep} Hz)...")
@@ -242,7 +248,9 @@ def apply_lowpass_filter_to_bundle(bundle_dir: str,
             fs_sweep,
             cutoff_hz
         )
-        df_pa_filtered.loc[mask, 'value'] = filtered_vals
+        # Convert filtered values to match the column's original dtype
+        original_dtype = df_pa_filtered['value'].dtype
+        df_pa_filtered.loc[mask, 'value'] = filtered_vals.astype(original_dtype)
         
         if verbose and sweep_id % max(1, n_sweeps_pa // 10) == 0:
             print(f"    Progress: Sweep {sweep_id}/{n_sweeps_pa} (fs={fs_sweep} Hz)...")

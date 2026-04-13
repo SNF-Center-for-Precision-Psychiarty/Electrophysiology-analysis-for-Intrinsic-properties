@@ -285,9 +285,24 @@ def extract_from_mixed_protocol_nwb(nwb_path, out_dir, cellNum, plot=False):
             sdf = pd.read_parquet(stimulus_path, columns=['sweep', 't_s', 'value', 'unit'])
             
             if VERBOSE: print("  Creating pA table (current data)...")
-            # pA table: response from VoltageClamp (0-3, 94-96) + stimulus from CurrentClamp (4-93)
-            # CurrentClamp: stim is current (amperes), so use that
-            stim_currentclamp = sdf[sdf['unit'].str.lower().str.contains('amp|pa', na=False)].copy()
+            # pA table: stimulus from CurrentClamp (current) + response from VoltageClamp (current)
+            # Use protocol_info to identify which sweeps are which protocol
+            
+            # Build masks based on actual protocol types detected during extraction
+            currentclamp_sweeps = [sw for sw, info in protocol_info.items() if info['protocol'] == 'CurrentClamp']
+            voltageclamp_sweeps = [sw for sw, info in protocol_info.items() if info['protocol'] == 'VoltageClamp']
+            
+            if VERBOSE:
+                print(f"    CurrentClamp sweeps: {currentclamp_sweeps}")
+                print(f"    VoltageClamp sweeps: {voltageclamp_sweeps}")
+            
+            # Get stimulus from CurrentClamp sweeps (these will be current/pA recordings)
+            stim_currentclamp = sdf[sdf['sweep'].isin(currentclamp_sweeps)].copy()
+            if VERBOSE:
+                print(f"    Stimulus rows from CurrentClamp: {len(stim_currentclamp)}")
+                if len(stim_currentclamp) > 0:
+                    print(f"      Unit values: {stim_currentclamp['unit'].unique()}")
+            
             del sdf  # Free stimulus data immediately
             gc.collect()
             
@@ -295,8 +310,12 @@ def extract_from_mixed_protocol_nwb(nwb_path, out_dir, cellNum, plot=False):
             if VERBOSE: print("  Loading response data...")
             rdf = pd.read_parquet(response_path, columns=['sweep', 't_s', 'value', 'unit'])
             
-            # VoltageClamp: response is current (amperes), so use that
-            resp_voltageclamp = rdf[rdf['unit'].str.lower().str.contains('amp|pa', na=False)].copy()
+            # Get response from VoltageClamp sweeps (these will be current/pA recordings)
+            resp_voltageclamp = rdf[rdf['sweep'].isin(voltageclamp_sweeps)].copy()
+            if VERBOSE:
+                print(f"    Response rows from VoltageClamp: {len(resp_voltageclamp)}")
+                if len(resp_voltageclamp) > 0:
+                    print(f"      Unit values: {resp_voltageclamp['unit'].unique()}")
             
             # Combine both for pA table
             pa_table = pd.concat([stim_currentclamp, resp_voltageclamp], ignore_index=True)
@@ -304,23 +323,34 @@ def extract_from_mixed_protocol_nwb(nwb_path, out_dir, cellNum, plot=False):
             gc.collect()
             
             pa_table = pa_table.sort_values(['sweep', 't_s']).reset_index(drop=True)
+            if VERBOSE:
+                print(f"    Total pA table rows: {len(pa_table)}")
+                print(f"    NaN count in pA table: {pa_table.isna().sum().sum()}")
             # pa_table.to_csv(os.path.join(out_dir, f"pA_{cellNum}.csv"), index=False)  # CSV creation disabled, using parquet only
             pa_table.to_parquet(os.path.join(out_dir, f"pA_{cellNum}.parquet"), index=False)
-            print(f"✔ Saved unified pA table (all sweeps) → pA_{cellNum}.parquet")
+            print(f"✔ Saved unified pA table (all sweeps) → pA_{cellNum}.parquet [{len(pa_table)} rows]")
             del pa_table
             gc.collect()
             
-            # mV table: stimulus from VoltageClamp (0-3, 94-96) + response from CurrentClamp (4-93)
+            # mV table: stimulus from VoltageClamp (voltage) + response from CurrentClamp (voltage)
             if VERBOSE: print("  Creating mV table (voltage data)...")
-            # Re-read stimulus for voltage filtering
+            # Re-read stimulus for voltage data
             sdf = pd.read_parquet(stimulus_path, columns=['sweep', 't_s', 'value', 'unit'])
-            # VoltageClamp: stim is voltage (volts), so use that
-            stim_voltageclamp = sdf[sdf['unit'].str.lower().str.contains('volt|mv', na=False)].copy()
+            # Get stimulus from VoltageClamp sweeps (these will be voltage/mV recordings)
+            stim_voltageclamp = sdf[sdf['sweep'].isin(voltageclamp_sweeps)].copy()
+            if VERBOSE:
+                print(f"    Stimulus rows from VoltageClamp: {len(stim_voltageclamp)}")
+                if len(stim_voltageclamp) > 0:
+                    print(f"      Unit values: {stim_voltageclamp['unit'].unique()}")
             del sdf
             gc.collect()
             
-            # CurrentClamp: response is voltage (volts), so use that
-            resp_currentclamp = rdf[rdf['unit'].str.lower().str.contains('volt|mv', na=False)].copy()
+            # Get response from CurrentClamp sweeps (these will be voltage/mV recordings)
+            resp_currentclamp = rdf[rdf['sweep'].isin(currentclamp_sweeps)].copy()
+            if VERBOSE:
+                print(f"    Response rows from CurrentClamp: {len(resp_currentclamp)}")
+                if len(resp_currentclamp) > 0:
+                    print(f"      Unit values: {resp_currentclamp['unit'].unique()}")
             del rdf  # Free response data
             gc.collect()
             
@@ -330,9 +360,12 @@ def extract_from_mixed_protocol_nwb(nwb_path, out_dir, cellNum, plot=False):
             gc.collect()
             
             mv_table = mv_table.sort_values(['sweep', 't_s']).reset_index(drop=True)
+            if VERBOSE:
+                print(f"    Total mV table rows: {len(mv_table)}")
+                print(f"    NaN count in mV table: {mv_table.isna().sum().sum()}")
             # mv_table.to_csv(os.path.join(out_dir, f"mV_{cellNum}.csv"), index=False)  # CSV creation disabled, using parquet only
             mv_table.to_parquet(os.path.join(out_dir, f"mV_{cellNum}.parquet"), index=False)
-            print(f"✔ Saved unified mV table (all sweeps) → mV_{cellNum}.parquet")
+            print(f"✔ Saved unified mV table (all sweeps) → mV_{cellNum}.parquet [{len(mv_table)} rows]")
             del mv_table
             gc.collect()
 

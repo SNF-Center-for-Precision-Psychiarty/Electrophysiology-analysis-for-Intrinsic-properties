@@ -23,6 +23,10 @@ from pathlib import Path
 import sys
 import json
 import gc
+import warnings
+
+# Suppress font warnings from matplotlib
+warnings.filterwarnings('ignore', category=UserWarning, message='.*Glyph.*missing from font.*')
 
 # Import the filter function
 from lowpass_filter import apply_butterworth_lowpass

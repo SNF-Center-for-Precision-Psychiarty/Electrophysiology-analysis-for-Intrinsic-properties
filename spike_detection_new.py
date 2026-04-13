@@ -6,9 +6,13 @@ import warnings
 import matplotlib
 matplotlib.use('Agg')  # Non-interactive backend for speed
 import matplotlib.pyplot as plt
-from scipy.signal import find_peaks
+from scipy.signal import find_peaks, savgol_filter
 from pathlib import Path
-from kink_detection import measure_kink_for_spike, plot_kink_diagnostics
+from kink_detection import (
+    measure_kink_for_spike, 
+    plot_kink_diagnostics,
+    should_skip_kink_detection_struggling_cell
+)
 from analysis_config import (
     PRE_THRESHOLD_WINDOW_MS,
     POST_THRESHOLD_WINDOW_MS,
@@ -31,6 +35,62 @@ VERBOSE = False
 def dbg(msg):
     if VERBOSE: print(f"[DEBUG] {msg}")
 
+def smooth_negative_current_stimulus(time, voltage, t_stim_start, t_stim_end, stimulus_level_pA=None):
+    """
+    Apply Savitzky-Goyal smoothing to stimulus period when negative current detected.
+    This removes artifactual spikes from cultured cell firing behavior during hyperpolarization.
+    
+    Args:
+        time: Time array (seconds) for response
+        voltage: Voltage/current array (mV or pA) - the response data to smooth
+        t_stim_start: Stimulus start time (seconds)
+        t_stim_end: Stimulus end time (seconds)
+        stimulus_level_pA: Injected current level from sweep_config (REQUIRED)
+    
+    Returns:
+        voltage_filtered: Response array with stimulus period smoothed if negative current detected
+    """
+    # Check if stimulus current is negative
+    if stimulus_level_pA is None or stimulus_level_pA >= -0.5:
+        # No smoothing needed for positive/zero stimulus
+        return voltage
+    
+    # Find stimulus window indices in response
+    stim_mask = (time >= t_stim_start) & (time <= t_stim_end)
+    stim_indices = np.where(stim_mask)[0]
+    
+    if len(stim_indices) == 0:
+        return voltage
+    
+    # Check if we have enough data points for smoothing
+    if len(stim_indices) < 5:
+        return voltage
+    
+    voltage_filtered = voltage.copy()
+    
+    if VERBOSE:
+        print(f"    Detected negative stimulus current ({stimulus_level_pA:.2f} pA)")
+    
+    # Get the response region during stimulus
+    stim_response = voltage[stim_indices]
+    
+    # Use window length based on number of samples
+    window_length = min(len(stim_indices), 51)  # Use 51-point window if possible
+    if window_length % 2 == 0:
+        window_length -= 1  # Must be odd
+    if window_length < 5:
+        window_length = 5
+    
+    try:
+        stim_response_smooth = savgol_filter(stim_response, window_length, polyorder=3)
+        voltage_filtered[stim_indices] = stim_response_smooth
+        if VERBOSE:
+            print(f"    ✓ Applied SavGol smoothing (window={window_length}, polyorder=3)")
+    except Exception as e:
+        raise ValueError(f"ERROR: Could not apply SavGol filter: {e}")
+    
+    return voltage_filtered
+
 def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced=False, analysis_windows=None, sweep_config=None, skip_plots=False):
     # Use parameters from centralized config
     pre_threshold_window_ms = PRE_THRESHOLD_WINDOW_MS
@@ -49,10 +109,6 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
         is_mixed = "stimulus" in manifest["tables"] and "response" in manifest["tables"]
     except:
         is_mixed = False
-
-    # Store relative time offsets for mixed protocol
-    relative_t_stim_start = None
-    relative_t_stim_end = None
     
     # Build analysis_windows from sweep_config if available and not already provided
     if analysis_windows is None and sweep_config is not None:
@@ -222,6 +278,23 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
         time = group["t_s"].to_numpy()
         voltage = group["value"].to_numpy()
 
+        stimulus_level_pA = None
+        # Get stimulus level from sweep_config
+        if sweep_config is not None:
+            try:
+                stimulus_level_pA = sweep_config["sweeps"][str(sweep_number)].get("stimulus_level_pA", None)
+                if VERBOSE and stimulus_level_pA is not None:
+                    print(f"    Stimulus level: {stimulus_level_pA:.2f} pA")
+            except (KeyError, TypeError):
+                stimulus_level_pA = None
+        
+        # Apply Savitzky-Golay smoothing to stimulus period if negative current detected
+        # This removes artifactual spikes from cultured cell firing behavior
+        voltage = smooth_negative_current_stimulus(
+            time, voltage, sweep_t_min, sweep_t_max,
+            stimulus_level_pA
+        )
+
         # dV/dt in mV/ms
         #dvdt = np.gradient(voltage, time) * 1000
 
@@ -275,6 +348,45 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
         # Track segment formation statistics
         segment_success_count = 0
         segment_fail_count = 0
+        
+        # Estimate resting potential from pre-stimulus baseline
+        # Use first 50ms before stimulus starts (robust baseline estimate)
+        baseline_duration_s = 0.05  # 50ms of pre-stimulus data
+        baseline_end_time = t_stim_start
+        baseline_start_time = max(time[0], baseline_end_time - baseline_duration_s)
+        
+        # Find indices in pre-stimulus baseline window
+        baseline_indices = np.where((time >= baseline_start_time) & (time <= baseline_end_time))[0]
+        
+        if len(baseline_indices) > 0:
+            # Use median (robust to noise/outliers) instead of mean
+            v_resting = np.median(voltage[baseline_indices])
+            if VERBOSE:
+                print(f"  ✓ Baseline estimation: {len(baseline_indices)} samples from {baseline_start_time:.6f}s to {baseline_end_time:.6f}s")
+                print(f"    Resting potential (median): {v_resting:.2f} mV")
+        else:
+            # Fallback: use first 100 samples as baseline if no pre-stimulus window
+            v_resting = np.median(voltage[:min(100, len(voltage))])
+            if VERBOSE:
+                print(f"  ⚠ No pre-stimulus window found. Using first 100 samples for baseline")
+                print(f"    Resting potential (median): {v_resting:.2f} mV")
+        
+        # Pre-calculate spike amplitudes for struggling cell detection
+        # (needed before processing peaks to identify weak spikes at end of sweep)
+        spike_amplitudes = []
+        for peak_idx in peaks:
+            peak_idx = int(peak_idx)
+            v_peak_temp = float(voltage[peak_idx])
+            
+            # Calculate amplitude from peak to resting potential
+            # This is more stable than looking at local minimum before peak
+            amplitude = v_peak_temp - v_resting
+            spike_amplitudes.append(amplitude)
+        
+        if len(spike_amplitudes) > 0 and VERBOSE:
+            print(f"  ✓ Spike amplitudes calculated (n={len(spike_amplitudes)})")
+            print(f"    Range: {np.min(spike_amplitudes):.2f} to {np.max(spike_amplitudes):.2f} mV")
+            print(f"    Median: {np.median(spike_amplitudes):.2f} mV")
 
         for i, peak in enumerate(peaks):
             # FOR DEBUGGING, IGNORE
@@ -506,12 +618,32 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
             kink_t = t_up[threshold_local:up_local + 1]
             kink_dvdt = dvdt_up[threshold_local:up_local + 1]
             
-            kink_metrics = measure_kink_for_spike(
-                kink_v,
-                kink_t,
-                kink_dvdt,
-                debug=debug_kink
+            # Check if cell is struggling at this peak (weak amplitude)
+            # Skip kink detection for weak spikes at end of sweep
+            skip_kink_struggling = should_skip_kink_detection_struggling_cell(
+                spike_amplitudes,
+                i,
+                amplitude_threshold_percent=60
             )
+            
+            if skip_kink_struggling:
+                # Cell struggling - skip kink detection for this weak spike
+                kink_metrics = {
+                    'num_kinks': 0,
+                    'kink_interval_ms': np.nan,
+                    'kink_ratio': np.nan,
+                    'kink_height_dvdt': np.nan,
+                    'kink_idx': None
+                }
+                if VERBOSE:
+                    print(f"  ⊘ Kink detection skipped for Sweep {sweep_number}, Peak #{i+1} (cell struggling - amplitude {spike_amplitudes[i]:.2f}mV < 60% of median)")
+            else:
+                kink_metrics = measure_kink_for_spike(
+                    kink_v,
+                    kink_t,
+                    kink_dvdt,
+                    debug=debug_kink
+                )
 
             # Notify user if kink detected
             if kink_metrics['num_kinks'] > 0:
