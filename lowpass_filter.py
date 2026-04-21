@@ -123,6 +123,7 @@ def filter_sweep_data(df_sweep: pd.DataFrame,
 
 def apply_lowpass_filter_to_bundle(bundle_dir: str, 
                                    cutoff_hz: float,
+                                   sweeps_to_filter=None,
                                    inplace: bool = True,
                                    verbose: bool = False) -> dict:
     """
@@ -135,6 +136,8 @@ def apply_lowpass_filter_to_bundle(bundle_dir: str,
     Args:
         bundle_dir: Path to the bundle directory
         cutoff_hz: Cutoff frequency in Hz (REQUIRED parameter)
+        sweeps_to_filter: Optional iterable of sweep IDs to filter. If None,
+            all sweeps are filtered.
         inplace: If True, overwrites parquet files. If False, returns filtered data only.
         verbose: Print progress information
         
@@ -143,8 +146,8 @@ def apply_lowpass_filter_to_bundle(bundle_dir: str,
         - 'df_mv': Filtered voltage dataframe
         - 'df_pa': Filtered current dataframe
         - 'cutoff_hz': Cutoff frequency used
-        - 'n_sweeps_mv': Number of sweeps in voltage data
-        - 'n_sweeps_pa': Number of sweeps in current data
+        - 'n_sweeps_mv': Number of voltage sweeps filtered
+        - 'n_sweeps_pa': Number of current sweeps filtered
         
     Notes:
         - Expects 'manifest.json' in bundle_dir
@@ -168,6 +171,9 @@ def apply_lowpass_filter_to_bundle(bundle_dir: str,
     if sample_rate_hz is None:
         raise ValueError(f"sampleRate_Hz not found in manifest for {bundle_dir}")
     
+    fs_mv = None
+    fs_pa = None
+
     # Handle both single rate and list of rates
     if isinstance(sample_rate_hz, list):
         # Multiple rates - will use per-sweep rates from protocols dict
@@ -198,26 +204,34 @@ def apply_lowpass_filter_to_bundle(bundle_dir: str,
         else:
             unique_rates = sorted(set(sweep_to_rate.values()))
             print(f"Sampling rates: {unique_rates} Hz (per-sweep)")
+
+    sweeps_filter_set = None
+    if sweeps_to_filter is not None:
+        sweeps_filter_set = {int(s) for s in sweeps_to_filter}
     
     # Load voltage data
     mv_path = p / man["tables"]["mv"]
     if verbose:
         print(f"\nLoading voltage data from {mv_path.name}...")
     df_mv = pd.read_parquet(mv_path)
-    n_sweeps_mv = df_mv['sweep'].nunique()
+    n_sweeps_mv_total = df_mv['sweep'].nunique()
     
     # Save backup of raw (unfiltered) voltage data BEFORE filtering
     mv_raw_path = p / man["tables"]["mv"].replace('.parquet', '_raw.parquet')
     df_mv.to_parquet(mv_raw_path, index=False)
     
     if verbose:
-        print(f"  Loaded: {len(df_mv):,} samples, {n_sweeps_mv} sweeps")
+        print(f"  Loaded: {len(df_mv):,} samples, {n_sweeps_mv_total} sweeps")
         print(f"  Saved backup of raw data to {mv_raw_path.name}")
         print(f"  Filtering each sweep individually...")
     
     # Apply filter to each sweep separately
     df_mv_filtered = df_mv.copy()
+    n_sweeps_mv_filtered = 0
     for sweep_id in sorted(df_mv['sweep'].unique()):
+        if sweeps_filter_set is not None and int(sweep_id) not in sweeps_filter_set:
+            continue
+
         mask = df_mv['sweep'] == sweep_id
         df_sweep = df_mv[mask]
         
@@ -243,10 +257,11 @@ def apply_lowpass_filter_to_bundle(bundle_dir: str,
             filtered_vals.astype(original_dtype),
             index=df_sweep.index
         )
-        
-        
-        if verbose and sweep_id % max(1, n_sweeps_mv // 10) == 0:
-            print(f"    Progress: Sweep {sweep_id}/{n_sweeps_mv} (fs={fs_sweep} Hz)...")
+
+        n_sweeps_mv_filtered += 1
+
+        if verbose and n_sweeps_mv_filtered % max(1, n_sweeps_mv_total // 10) == 0:
+            print(f"    Progress: Sweep {sweep_id}/{n_sweeps_mv_total} (fs={fs_sweep} Hz)...")
     
     if verbose:
         print(f"  ✓ Voltage filtering complete")
@@ -256,20 +271,24 @@ def apply_lowpass_filter_to_bundle(bundle_dir: str,
     if verbose:
         print(f"\nLoading current data from {pa_path.name}...")
     df_pa = pd.read_parquet(pa_path)
-    n_sweeps_pa = df_pa['sweep'].nunique()
+    n_sweeps_pa_total = df_pa['sweep'].nunique()
     
     # Save backup of raw (unfiltered) current data BEFORE filtering
     pa_raw_path = p / man["tables"]["pa"].replace('.parquet', '_raw.parquet')
     df_pa.to_parquet(pa_raw_path, index=False)
     
     if verbose:
-        print(f"  Loaded: {len(df_pa):,} samples, {n_sweeps_pa} sweeps")
+        print(f"  Loaded: {len(df_pa):,} samples, {n_sweeps_pa_total} sweeps")
         print(f"  Saved backup of raw data to {pa_raw_path.name}")
         print(f"  Filtering each sweep individually...")
     
     # Apply filter to each sweep separately
     df_pa_filtered = df_pa.copy()
+    n_sweeps_pa_filtered = 0
     for sweep_id in sorted(df_pa['sweep'].unique()):
+        if sweeps_filter_set is not None and int(sweep_id) not in sweeps_filter_set:
+            continue
+
         mask = df_pa['sweep'] == sweep_id
         df_sweep = df_pa[mask]
         
@@ -295,8 +314,9 @@ def apply_lowpass_filter_to_bundle(bundle_dir: str,
             filtered_vals.astype(original_dtype),
             index=df_sweep.index
         )
-        if verbose and sweep_id % max(1, n_sweeps_pa // 10) == 0:
-            print(f"    Progress: Sweep {sweep_id}/{n_sweeps_pa} (fs={fs_sweep} Hz)...")
+        n_sweeps_pa_filtered += 1
+        if verbose and n_sweeps_pa_filtered % max(1, n_sweeps_pa_total // 10) == 0:
+            print(f"    Progress: Sweep {sweep_id}/{n_sweeps_pa_total} (fs={fs_sweep} Hz)...")
     
     if verbose:
         print(f"  ✓ Current filtering complete")
@@ -320,8 +340,8 @@ def apply_lowpass_filter_to_bundle(bundle_dir: str,
         'df_mv': df_mv_filtered,
         'df_pa': df_pa_filtered,
         'cutoff_hz': cutoff_hz,
-        'n_sweeps_mv': n_sweeps_mv,
-        'n_sweeps_pa': n_sweeps_pa,
+        'n_sweeps_mv': n_sweeps_mv_filtered,
+        'n_sweeps_pa': n_sweeps_pa_filtered,
         'fs_mv': fs_mv,
         'fs_pa': fs_pa
     }

@@ -34,57 +34,68 @@ Step 7: Results finalization
 ## What Gets Measured
 
 ### Automatically Identified
-- **Hyperpolarizing sweeps:** Sweeps with injected current < -10 pA
-- **Baseline window:** From sweep_config.json (typically 0-10 ms)
+- **Negative-current sweeps:** Sweeps with injected current < 0 pA
 - **Stimulus window:** From sweep_config.json (typically 10-810 ms)
+- **Sag baseline reference (`V_baseline`):** Most negative voltage in the first 80 ms of stimulus
 
 ### Calculated Metrics
 
-For each hyperpolarizing sweep:
+For each negative-current sweep:
 
-| Metric | Description | Range |
-|--------|-------------|-------|
-| `sag_voltage_mV` | Absolute sag magnitude (How much did the voltage recover after the dip (in mV)?) | V_steady - V_min (mV) |
-| `sag_ratio` | Normalized sag (How much of the drop was recovered?) | Unitless (typically 0.5-1.5) | (V_steady - V_min) / (V_baseline - V_min)
-| `sag_percent` | Sag as percentage | sag_ratio × 100 (%) |
+| Metric | Description | Formula / Units |
+|--------|-------------|-----------------|
+| `sag_voltage_mV` | Absolute sag magnitude (how much voltage recovers from `V_min`) | `V_steady - V_min` (mV) |
+| `sag_ratio` | Sag ratio using current baseline definition | `(V_steady - V_min) / (V_baseline - V_min)` (unitless) |
+| `sag_percent` | Sag as percentage | `sag_ratio × 100` (%) |
+
+Important:
+- With the current definition of `V_baseline` (minimum in first 80 ms of stimulus), `sag_ratio` is not constrained to 0-1 and can exceed 1.
+- A value `>1` does not necessarily mean the trace overshot pre-stimulus resting Vm.
 
 ### Example from Test Data
 
 For Sweep 0 (-100 pA injection):
 
 ```
-V_baseline:  -67.62 mV  (during baseline window, 0-10ms)
+V_baseline:  -67.62 mV  (minimum within first 80 ms of stimulus)
 V_min:       -76.73 mV  (most negative voltage reached)
-V_steady:    -67.54 mV  (voltage at end of stimulus, 760-810ms)
+V_steady:    -67.54 mV  (mean over last 80 ms of stimulus, with 1 ms end buffer)
 
 Total hyperpolarization: 9.11 mV
 Sag voltage:             9.19 mV  (recovery from minimum)
-Sag ratio:               1.009    (essentially complete recovery)
+Sag ratio:               1.009
+
+Why this can be >1:
+- Denominator is `(V_baseline - V_min)`, where `V_baseline` is already close to `V_min` by design.
+- If that denominator is small, modest recovery can produce `sag_ratio > 1`.
 ```
 
 ## Interpreting Sag Ratio
 
 ```
-sag_ratio < 0.5  →  Limited recovery (weak HCN channels?)
-sag_ratio ≈ 1.0  →  Complete recovery (normal HCN function)
-sag_ratio > 1.5  →  Overshoot past baseline (strong HCN activity)
+sag_ratio near 0   →  Little recovery from V_min
+sag_ratio around 1 →  Recovery roughly equals (V_baseline - V_min)
+sag_ratio > 1      →  Recovery exceeds (V_baseline - V_min) under this definition
 ```
+
+Interpretation note:
+- In this pipeline, treat `sag_ratio` primarily as a within-pipeline comparative metric across sweeps/cells processed the same way.
+- Do not assume a hard biological bound at 1 for this specific implementation.
 
 ### Your Test Data
 
-Mean sag ratio: **1.047 ± 0.102** (across 5 hyperpolarizing sweeps)
+Mean sag ratio: **1.047 ± 0.102** (across 5 negative-current sweeps)
 
-**Interpretation:** 
-- Healthy, active HCN channels
-- Voltage recovers nearly completely during stimulus
-- Normal excitability regulation
+**Interpretation:**
+- Indicates measurable sag/recovery during hyperpolarizing sweeps.
+- Should be interpreted with this pipeline's ratio definition (not as a strict 0-1 normalized fraction).
 
 ## In analysis.parquet
 
 Three new columns are automatically added:
 
 ```python
-# For hyperpolarizing sweeps only
+# For negative-current sweeps only
 df['sag_voltage_mV']   # float, in mV
 df['sag_ratio']        # float, unitless
 df['sag_percent']      # float, percentage
@@ -103,8 +114,8 @@ df = pd.read_parquet("bundle_dir/analysis.parquet")
 # Get sag measurements for all sweeps
 print(df[['sweep', 'avg_injected_current_pA', 'sag_voltage_mV', 'sag_ratio']])
 
-# Get only hyperpolarizing sweeps with sag data
-hyper = df[df['avg_injected_current_pA'] < -10]
+# Get only negative-current sweeps with sag data
+hyper = df[df['avg_injected_current_pA'] < 0]
 print(hyper[['sweep', 'sag_ratio', 'sag_percent']])
 
 # Calculate mean sag
@@ -130,23 +141,23 @@ Uses timing from `sweep_config.json`:
 ```
 
 **Why this matters:**
-- Baseline window = voltage before any current injection
 - Stimulus window = voltage response to current injection
-- Steady-state window = last 50 ms of stimulus
+- `V_baseline` for sag ratio = minimum voltage in first 80 ms of stimulus
+- `V_steady` = mean voltage in last 80 ms of stimulus, with 1 ms buffer before stimulus end
 
 ### Sampling Details
 
 - Sampling rate: 200 kHz (5 µs per sample)
-- Baseline duration: ~10 ms (2000 samples)
+- Early-stimulus baseline reference duration: 80 ms (16,000 samples)
 - Stimulus duration: ~800 ms (160,000 samples)
-- Steady-state window: Last 50 ms (10,000 samples)
+- Steady-state window: Last 80 ms with 1 ms end buffer (~16,000 samples)
 
 ## Code Structure
 
 ### Main Functions in sag_current.py
 
 ```python
-find_hyperpolarizing_sweeps(analysis_df, threshold_pA=-10)
+find_negative_sweeps(analysis_df, threshold_pA=0)
 # Returns: List of sweep numbers with injected current < threshold
 
 measure_voltage_response(mv_data, sweep, sweep_config=None)
@@ -173,7 +184,7 @@ if sag_results:
     df_analysis['sag_ratio'] = np.nan
     df_analysis['sag_percent'] = np.nan
     
-    # Fill in values for hyperpolarizing sweeps
+    # Fill in values for negative-current sweeps
     for sweep, measurements in sag_results['sag_results'].items():
         mask = df_analysis['sweep'] == sweep
         df_analysis.loc[mask, 'sag_voltage_mV'] = measurements['sag_voltage_mV']
@@ -185,9 +196,9 @@ if sag_results:
 
 ## Troubleshooting
 
-### "No hyperpolarizing sweeps found"
+### "No negative-current sweeps found"
 
-**Cause:** All injected currents are ≥ -10 pA
+**Cause:** All injected currents are ≥ 0 pA
 
 **Solution:** Check your sweep_config for actual current values
 ```python
@@ -202,13 +213,13 @@ with open("bundle_dir/sweep_config.json") as f:
 
 **Check:**
 1. Is sweep_config.json present in the bundle?
-2. Are baseline windows reasonable (typically 0-10 ms)?
-3. Are stimulus windows reasonable (typically 10-800+ ms)?
+2. Are stimulus windows reasonable (typically 10-800+ ms)?
+3. Remember: with this implementation, `sag_ratio > 1` can be valid and does not automatically indicate an error.
 
 ### Missing sag columns in analysis.parquet
 
 **Solution:** Re-run the pipeline for that bundle. Step 6 will:
-1. Calculate sag for hyperpolarizing sweeps
+1. Calculate sag for negative-current sweeps
 2. Add the three columns
 3. Save updated analysis.parquet
 
@@ -223,13 +234,16 @@ with open("bundle_dir/sweep_config.json") as f:
 
 ### Typical Sag Ratios by Cell Type
 
+Note: The values below are literature-style heuristics and may not map directly to this pipeline's current `sag_ratio` definition.
+For strict comparisons, use one consistent calculation method across all datasets.
+
 | Cell Type | Typical Sag Ratio |
 |-----------|-----------------|
 | Fast-spiking interneurons | 0.1-0.3 |
 | Regular-spiking pyramidal cells | 0.8-1.2 |
 | Neurons with strong Ih | 1.2-2.0 |
 
-Your test data (1.047) is consistent with regular-spiking cells with healthy HCN function.
+Your test data (1.047) falls in a reasonable range for this dataset and this pipeline definition.
 
 ## Related Metrics
 

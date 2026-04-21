@@ -339,7 +339,7 @@ def get_parent_directory() -> Path:
         print("Please try another directory.")
 
 
-def run_nwb_data_preparation(parent_dir = None):
+def run_nwb_data_preparation(parent_dir = None, no_checkpoints: bool = False):
     """Run STEP 1: Data preparation with automatic protocol detection
     
     Args:
@@ -408,16 +408,19 @@ Mixed protocol:  Uses process_human_data_mixed_protocol.py with per-sweep rates
         template_path = script_dir / 'ePhys_log_sheet.xlsx'
         if not template_path.is_file():
             print(f"\n⚠ Template file not found: {template_path}")
+            if no_checkpoints:
+                print("Cannot proceed without metadata template in no-checkpoints mode.")
+                sys.exit(1)
             print("Please provide the path to the Excel metadata template:")
             template_path_input = input("Path to Excel metadata template: ").strip()
             template_path = Path(template_path_input).expanduser()
-            
+
             # Validate the user-provided path
             if not template_path.is_file():
                 print(f"\n✗ ERROR: Template file not found: {template_path}")
                 print("Cannot proceed without metadata template.")
                 sys.exit(1)
-            
+
             print(f"✓ Using template: {template_path}\n")
         
         # Separate files by protocol type
@@ -501,7 +504,7 @@ Mixed protocol:  Uses process_human_data_mixed_protocol.py with per-sweep rates
         sys.exit(1)
 
 
-def run_nwb_analysis(parent_dir = None):
+def run_nwb_analysis(parent_dir = None, no_checkpoints: bool = False):
     """Run STEP 2: Analysis on bundle directories
     
     Args:
@@ -567,7 +570,7 @@ For each bundle, this will:
     
     # Ask about resuming from a specific bundle
     start_idx = 0
-    if len(bundle_dirs) > 1:
+    if len(bundle_dirs) > 1 and not no_checkpoints:
         print(f"\nResume options:")
         print(f"  Press ENTER to start from the beginning")
         print(f"  Or enter a bundle number (1-{len(bundle_dirs)}) to resume from:")
@@ -599,6 +602,9 @@ For each bundle, this will:
                 argv.append("--skip-analysis")
             elif analysis_choice == "3":
                 argv.append("--skip-plots")
+
+            if no_checkpoints:
+                argv.append("--no-checkpoints")
             
             sys.argv = argv
             
@@ -667,7 +673,7 @@ Note: You will need to provide paths for:
 """)
         
         # Run data preparation and capture the parent directory
-        parent_dir = run_nwb_data_preparation()
+        parent_dir = run_nwb_data_preparation(no_checkpoints=no_checkpoints)
         
         # Automatically run analysis on all bundles
         print("\n" + "="*70)
@@ -682,7 +688,7 @@ Note: You will need to provide paths for:
         
         if analyze_now == "y":
             # Pass the parent directory from data prep to avoid re-prompting
-            run_nwb_analysis(parent_dir)
+            run_nwb_analysis(parent_dir, no_checkpoints=no_checkpoints)
             print("\n" + "="*70)
             print("✓ PIPELINE COMPLETE")
             print("="*70)
@@ -697,7 +703,7 @@ Note: You will need to provide paths for:
     
     elif pipeline_choice == "2":
         # Data preparation only
-        run_nwb_data_preparation()
+        run_nwb_data_preparation(no_checkpoints=no_checkpoints)
         
         print("\n" + "="*70)
         print("✓ DATA PREPARATION COMPLETE")
@@ -708,7 +714,7 @@ Note: You will need to provide paths for:
     
     else:  # pipeline_choice == "3"
         # Analysis only
-        run_nwb_analysis()
+        run_nwb_analysis(no_checkpoints=no_checkpoints)
         print("\n" + "="*70)
         print("✓ ANALYSIS COMPLETE")
         print("="*70)

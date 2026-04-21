@@ -10,7 +10,7 @@ Improved version:
 """
 
 import numpy as np
-from scipy.signal import find_peaks
+from scipy.signal import find_peaks, peak_widths
 import matplotlib.pyplot as plt
 from pathlib import Path
 
@@ -20,9 +20,19 @@ from pathlib import Path
 # -----------------------------
 KINK_DETECTION_PROMINENCE_PERCENT = 0.1   # 10% of max dV/dt
 KINK_DETECTION_MIN_DISTANCE_SAMPLES = 5   # Increase separation
-KINK_DETECTION_MIN_PROMINENCE_FOR_LOCAL_MAXIMA = 0.05  # 5% of max dV/dt - filter out near-zero prominence peaks
-KINK_MAX_DISTANCE_FROM_UPSTROKE_SAMPLES = 10  # Exclude peaks within last 10 samples before upstroke
-KINK_RATIO_THRESHOLD = 0.2                # Kink must be ≥20% of main peak
+KINK_DETECTION_MIN_PROMINENCE_FOR_LOCAL_MAXIMA = 0.10  # 10% of max dV/dt - suppress tiny local wiggles
+KINK_MIN_SELECTED_PROMINENCE_RATIO = 0.14 # Stage-1 selected prominence ratio requirement
+KINK_RATIO_THRESHOLD = 0.45               # Stage-1 kink/main ratio requirement
+KINK_MIN_POST_DIP_RATIO = 0.14            # Stage-1 post-kink dip requirement
+KINK_MIN_INTERVAL_MS = 0.6                # Kink must precede max upstroke by at least 0.6 ms
+KINK_ENABLE_STAGE2 = False                # Disable relaxed fallback stage; keep strict Stage-1 only
+KINK_STAGE2_RATIO_RELAX = 0.03            # Stage-2 relaxed ratio amount (tighter fallback)
+KINK_STAGE2_PROMINENCE_RELAX = 0.04       # Stage-2 relaxed selected-prominence amount
+KINK_STAGE2_DIP_RELAX = 0.03              # Stage-2 relaxed post-dip amount
+KINK_TIEBREAK_MIN_MARGIN_RATIO = 0.05     # If top two candidates are closer than this, use tie-break rules
+KINK_ANTI_WIGGLE_MIN_WIDTH_MS = 0.30      # Reject ultra-narrow wiggle-like candidates
+KINK_ANTI_WIGGLE_MIN_PROMINENCE_RATIO = 0.10  # Reject weak local wiggles
+KINK_ANTI_WIGGLE_MAX_SIGN_CHANGES = 6     # Reject highly oscillatory post-candidate segments
 
 
 # -----------------------------
@@ -62,7 +72,7 @@ def measure_kink_metrics(dvdt_array, times_array, threshold_idx, debug=False):
         'kink_interval_ms': np.nan,
         'kink_ratio': np.nan,
         'kink_height_dvdt': np.nan,
-        'kink_idx': None
+        'kink_idx': None,
     }
 
     if len(dvdt_array) < 3:
@@ -154,15 +164,8 @@ def measure_kink_metrics(dvdt_array, times_array, threshold_idx, debug=False):
     if debug and len(filtered_local_maxima) < len(all_local_maxima):
         print(f"      After prominence filter (>{min_prominence_threshold:.3f}): {len(filtered_local_maxima)} peaks remain")
     
-    # Filter by distance: exclude peaks too close to upstroke
-    min_distance_threshold = max_upstroke_idx - KINK_MAX_DISTANCE_FROM_UPSTROKE_SAMPLES
-    distance_filtered_peaks = [p for p in filtered_local_maxima if p < min_distance_threshold]
-    
-    if debug and len(distance_filtered_peaks) < len(filtered_local_maxima):
-        print(f"      After distance filter (idx < {min_distance_threshold}): {len(distance_filtered_peaks)} peaks remain")
-    
     # Combine: use find_peaks results, but also add any high local maxima
-    candidate_peaks = set(valid_peaks) | set(distance_filtered_peaks)
+    candidate_peaks = set(valid_peaks) | set(filtered_local_maxima)
 
     if len(candidate_peaks) == 0:
         if debug:
@@ -173,52 +176,135 @@ def measure_kink_metrics(dvdt_array, times_array, threshold_idx, debug=False):
         print(f"    [KINK] Step 4: Combined candidates")
         print(f"      Total unique candidates: {len(candidate_peaks)}")
 
-    # --- Step 4: Choose strongest candidate ---
-    if debug:
-        print(f"    [KINK] Step 5: Select strongest candidate")
-    
-    kink_idx = max(candidate_peaks, key=lambda p: dvdt_array[p])
-    kink_height = dvdt_array[kink_idx]
+    # --- Step 4: Build simple per-candidate metrics (rule-based path) ---
+    if len(times_array) >= 2:
+        dt_ms = np.mean(np.diff(times_array)) * 1000.0
+    else:
+        dt_ms = 0.02
+
+    candidate_records = []
+    for p in candidate_peaks:
+        height = dvdt_array[p]
+        kink_ratio = height / max_upstroke_height
+
+        left_min = np.min(dvdt_array[threshold_idx:p]) if p > threshold_idx else dvdt_array[threshold_idx]
+        right_min = np.min(dvdt_array[p + 1:max_upstroke_idx + 1]) if p < max_upstroke_idx else dvdt_array[max_upstroke_idx]
+        selected_prominence = height - max(left_min, right_min)
+        selected_prominence_ratio = selected_prominence / max_upstroke_height
+
+        if max_upstroke_idx - p >= 2:
+            post_segment = dvdt_array[p + 1:max_upstroke_idx]
+            post_min = np.min(post_segment) if len(post_segment) > 0 else height
+            post_dip_ratio = (height - post_min) / max_upstroke_height
+            centered = post_segment - np.mean(post_segment) if len(post_segment) > 0 else np.array([])
+            sign_changes = int(np.sum(np.diff(np.sign(centered)) != 0)) if len(centered) >= 3 else 0
+        else:
+            post_dip_ratio = 0.0
+            sign_changes = 0
+
+        kink_interval_ms = abs((times_array[p] - times_array[max_upstroke_idx]) * 1000.0)
+
+        try:
+            widths, _, _, _ = peak_widths(dvdt_array, [p], rel_height=0.5)
+            width_ms = widths[0] * dt_ms
+        except Exception:
+            width_ms = np.nan
+
+        candidate_records.append({
+            'idx': p,
+            'height': height,
+            'kink_ratio': kink_ratio,
+            'selected_prominence_ratio': selected_prominence_ratio,
+            'post_dip_ratio': post_dip_ratio,
+            'interval_ms': kink_interval_ms,
+            'width_ms': width_ms,
+            'sign_changes': sign_changes,
+        })
 
     if debug:
-        print(f"      Selected index: {kink_idx}")
-        print(f"      Selected height: {kink_height:.3f} mV/ms")
-        print(f"      All candidates sorted by height:")
-        sorted_candidates = sorted(candidate_peaks, key=lambda x: dvdt_array[x], reverse=True)
-        for rank, p in enumerate(sorted_candidates[:10], 1):  # Show top 10
-            ratio = dvdt_array[p] / max_upstroke_height
-            print(f"        #{rank}: idx={p}, height={dvdt_array[p]:.3f}, ratio={ratio:.3f}")
+        print(f"    [KINK] Step 5: Candidate metrics table ({len(candidate_records)} candidates)")
+        for c in sorted(candidate_records, key=lambda x: x['height'], reverse=True)[:10]:
+            print(
+                f"      idx={c['idx']}, h={c['height']:.3f}, ratio={c['kink_ratio']:.3f}, "
+                f"prom={c['selected_prominence_ratio']:.3f}, dip={c['post_dip_ratio']:.3f}, "
+                f"interval={c['interval_ms']:.3f}ms, width={c['width_ms']:.3f}ms, wiggles={c['sign_changes']}"
+            )
 
-    # --- Step 5: Ratio filter ---
+    # Anti-wiggle guard for noisy fluctuation-heavy candidates.
+    anti_wiggle_survivors = [
+        c for c in candidate_records
+        if c['selected_prominence_ratio'] >= KINK_ANTI_WIGGLE_MIN_PROMINENCE_RATIO
+        and (np.isnan(c['width_ms']) or c['width_ms'] >= KINK_ANTI_WIGGLE_MIN_WIDTH_MS)
+        and c['sign_changes'] <= KINK_ANTI_WIGGLE_MAX_SIGN_CHANGES
+    ]
+
     if debug:
-        print(f"    [KINK] Step 6: Apply ratio threshold filter")
-    
-    kink_ratio = kink_height / max_upstroke_height
+        print(f"    [KINK] Step 6: Anti-wiggle survivors: {len(anti_wiggle_survivors)}")
 
-    if debug:
-        print(f"      Kink ratio: {kink_ratio:.3f}")
-        print(f"      Threshold: {KINK_RATIO_THRESHOLD}")
+    # Stage 1: strict rule-based gates.
+    stage1_survivors = [
+        c for c in anti_wiggle_survivors
+        if c['kink_ratio'] >= KINK_RATIO_THRESHOLD
+        and c['selected_prominence_ratio'] >= KINK_MIN_SELECTED_PROMINENCE_RATIO
+        and c['post_dip_ratio'] >= KINK_MIN_POST_DIP_RATIO
+        and c['interval_ms'] >= KINK_MIN_INTERVAL_MS
+    ]
 
-    if kink_ratio < KINK_RATIO_THRESHOLD:
+    selected = None
+
+    if stage1_survivors:
+        selected = max(stage1_survivors, key=lambda x: x['height'])
         if debug:
-            print(f"      ✗ REJECTED - ratio {kink_ratio:.3f} < {KINK_RATIO_THRESHOLD}")
+            print(f"    [KINK] Stage 1 passed with {len(stage1_survivors)} survivors")
+    elif KINK_ENABLE_STAGE2:
+        # Stage 2: relaxed gates + deterministic tie-break for borderline candidates.
+        ratio_relaxed = max(0.0, KINK_RATIO_THRESHOLD - KINK_STAGE2_RATIO_RELAX)
+        prominence_relaxed = max(0.0, KINK_MIN_SELECTED_PROMINENCE_RATIO - KINK_STAGE2_PROMINENCE_RELAX)
+        dip_relaxed = max(0.0, KINK_MIN_POST_DIP_RATIO - KINK_STAGE2_DIP_RELAX)
+
+        stage2_survivors = [
+            c for c in anti_wiggle_survivors
+            if c['kink_ratio'] >= ratio_relaxed
+            and c['selected_prominence_ratio'] >= prominence_relaxed
+            and c['post_dip_ratio'] >= dip_relaxed
+            and c['interval_ms'] >= KINK_MIN_INTERVAL_MS
+        ]
+
+        if debug:
+            print(f"    [KINK] Stage 2 survivors (relaxed): {len(stage2_survivors)}")
+
+        if stage2_survivors:
+            stage2_sorted = sorted(stage2_survivors, key=lambda x: x['height'], reverse=True)
+            selected = stage2_sorted[0]
+            if len(stage2_sorted) > 1:
+                top = stage2_sorted[0]
+                second = stage2_sorted[1]
+                margin = top['kink_ratio'] - second['kink_ratio']
+                if margin < KINK_TIEBREAK_MIN_MARGIN_RATIO:
+                    # Tie-break: prefer deeper dip, then stronger prominence, then fewer wiggles.
+                    selected = sorted(
+                        stage2_sorted[:2],
+                        key=lambda x: (x['post_dip_ratio'], x['selected_prominence_ratio'], -x['sign_changes']),
+                        reverse=True,
+                    )[0]
+                    if debug:
+                        print("    [KINK] Tie-break used for near-equal candidates")
+    elif debug:
+        print("    [KINK] Stage 2 disabled; strict Stage 1 only")
+
+    if selected is None:
+        if debug:
+            print("    [KINK] No candidate passed stage rules")
         return result
-    
-    if debug:
-        print(f"      ✓ ACCEPTED - ratio {kink_ratio:.3f} >= {KINK_RATIO_THRESHOLD}")
 
-    # --- Step 6: Compute interval ---
-    kink_time = times_array[kink_idx]
-    upstroke_time = times_array[max_upstroke_idx]
-
-    kink_interval_ms = abs((kink_time - upstroke_time) * 1000)
+    kink_idx = selected['idx']
+    kink_height = selected['height']
+    kink_ratio = selected['kink_ratio']
+    kink_interval_ms = selected['interval_ms']
 
     if debug:
-        print(f"    [KINK] Step 7: Compute timing")
-        print(f"      Kink time: {kink_time:.6f} s")
-        print(f"      Upstroke time: {upstroke_time:.6f} s")
-        print(f"      Interval: {kink_interval_ms:.3f} ms")
-        print(f"    [KINK] ✓ KINK DETECTED")
+        print(f"    [KINK] Selected idx={kink_idx}, ratio={kink_ratio:.3f}, interval={kink_interval_ms:.3f} ms")
+        print("    [KINK] KINK DETECTED")
 
     # --- Step 7: Update results ---
     result.update({
@@ -400,6 +486,24 @@ def plot_kink_diagnostics(
     axes[1].scatter(time_rel[upstroke_local], dvdt[upstroke_local],
                     s=100, color='red', zorder=5, marker='^')
     
+    # Draw the width measurement line at 50% of kink peak height
+    from scipy.signal import peak_widths
+    try:
+        if kink_local > 0 and kink_local < len(dvdt) - 1:
+            widths, width_height, left_idx, right_idx = peak_widths(dvdt, [kink_local], rel_height=0.5)
+            left_idx_int = int(left_idx[0])
+            right_idx_int = int(right_idx[0])
+            if 0 <= left_idx_int < len(time_rel) and 0 <= right_idx_int < len(time_rel):
+                # Draw horizontal line at 50% height
+                axes[1].hlines(width_height[0], time_rel[left_idx_int], time_rel[right_idx_int],
+                              colors='cyan', linewidth=2.5, linestyle='--', label=f'Width @ 50% = {widths[0]*(time_window[1]-time_window[0])*1000:.3f} ms')
+                # Mark the boundaries
+                axes[1].scatter([time_rel[left_idx_int], time_rel[right_idx_int]], 
+                               [width_height[0], width_height[0]],
+                               s=80, color='cyan', zorder=6, marker='|')
+    except Exception as e:
+        pass
+    
     # Shade the threshold-to-upstroke region
     axes[1].axvspan(time_rel[threshold_local], time_rel[upstroke_local], 
                    alpha=0.1, color='yellow')
@@ -407,6 +511,7 @@ def plot_kink_diagnostics(
     axes[1].set_ylabel('dV/dt (mV/ms)', fontsize=11, fontweight='bold')
     axes[1].set_xlabel('Time relative to threshold (ms)', fontsize=11, fontweight='bold')
     axes[1].grid(True, alpha=0.3)
+    axes[1].legend(loc='best', fontsize=9)
 
     plt.tight_layout()
 

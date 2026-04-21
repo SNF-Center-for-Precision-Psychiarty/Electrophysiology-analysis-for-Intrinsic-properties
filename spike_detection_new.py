@@ -35,7 +35,15 @@ VERBOSE = False
 def dbg(msg):
     if VERBOSE: print(f"[DEBUG] {msg}")
 
-def smooth_negative_current_stimulus(time, voltage, t_stim_start, t_stim_end, stimulus_level_pA=None):
+def smooth_negative_current_stimulus(
+    time,
+    voltage,
+    t_stim_start,
+    t_stim_end,
+    stimulus_level_pA=None,
+    plot_dir=None,
+    sweep_number=None,
+):
     """
     Apply Savitzky-Goyal smoothing to stimulus period when negative current detected.
     This removes artifactual spikes from cultured cell firing behavior during hyperpolarization.
@@ -86,6 +94,29 @@ def smooth_negative_current_stimulus(time, voltage, t_stim_start, t_stim_end, st
         voltage_filtered[stim_indices] = stim_response_smooth
         if VERBOSE:
             print(f"    ✓ Applied SavGol smoothing (window={window_length}, polyorder=3)")
+
+        if plot_dir is not None:
+            plot_path = Path(plot_dir)
+            plot_path.mkdir(parents=True, exist_ok=True)
+
+            fig, ax = plt.subplots(figsize=(10, 4))
+            ax.plot(time, voltage, color="0.65", linewidth=1, label="Raw")
+            ax.plot(time, voltage_filtered, color="tab:blue", linewidth=1.5, label="Smoothed")
+            ax.axvspan(t_stim_start, t_stim_end, color="gold", alpha=0.15, label="Stimulus window")
+            ax.axvline(t_stim_start, color="green", linestyle="--", linewidth=1)
+            ax.axvline(t_stim_end, color="red", linestyle="--", linewidth=1)
+            ax.set_xlabel("Time (s)")
+            ax.set_ylabel("Voltage (mV)")
+            title = "Negative Current Smoothing"
+            if sweep_number is not None:
+                title += f" - Sweep {sweep_number}"
+            ax.set_title(title)
+            ax.legend(loc="best")
+            ax.grid(True, alpha=0.2)
+            plt.tight_layout()
+            filename = f"sweep_{sweep_number}_smoothing.jpeg" if sweep_number is not None else "smoothing.jpeg"
+            plt.savefig(plot_path / filename, dpi=200)
+            plt.close(fig)
     except Exception as e:
         raise ValueError(f"ERROR: Could not apply SavGol filter: {e}")
     
@@ -182,6 +213,17 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
     max_peaks_overall = 0
     sweep_results = []
     filtered_peaks = {}
+    total_struggling_kink_skips = 0
+
+    # Remove stale kink diagnostics from previous runs so output reflects current settings only
+    kink_plot_dir = Path(bundle_path) / "Kink_Diagnostics"
+    if kink_plot_dir.exists():
+        for old_plot in kink_plot_dir.glob("kink_spike_sweep*.jpeg"):
+            try:
+                old_plot.unlink()
+            except OSError:
+                pass
+
     if VERBOSE: print("RUNNING SPIKE DETECTION")
     
     # Get unique sweeps
@@ -290,9 +332,18 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
         
         # Apply Savitzky-Golay smoothing to stimulus period if negative current detected
         # This removes artifactual spikes from cultured cell firing behavior
+        smoothing_plot_dir = None
+        if not skip_plots:
+            smoothing_plot_dir = Path(bundle_path) / "Negative_Current_Smoothing"
+
         voltage = smooth_negative_current_stimulus(
-            time, voltage, sweep_t_min, sweep_t_max,
-            stimulus_level_pA
+            time,
+            voltage,
+            sweep_t_min,
+            sweep_t_max,
+            stimulus_level_pA,
+            plot_dir=smoothing_plot_dir,
+            sweep_number=sweep_number,
         )
 
         # dV/dt in mV/ms
@@ -628,12 +679,13 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
             
             if skip_kink_struggling:
                 # Cell struggling - skip kink detection for this weak spike
+                total_struggling_kink_skips += 1
                 kink_metrics = {
                     'num_kinks': 0,
                     'kink_interval_ms': np.nan,
                     'kink_ratio': np.nan,
                     'kink_height_dvdt': np.nan,
-                    'kink_idx': None
+                    'kink_idx': None,
                 }
                 if VERBOSE:
                     print(f"  ⊘ Kink detection skipped for Sweep {sweep_number}, Peak #{i+1} (cell struggling - amplitude {spike_amplitudes[i]:.2f}mV < 60% of median)")
@@ -1650,6 +1702,7 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
             print("  Install with: pip install Pillow")
     
     # Return results for further processing
+    print(f"  ℹ Total struggling-cell kink skips (bundle): {total_struggling_kink_skips}")
     return updated_analysis
 
 # FOR TESTING:

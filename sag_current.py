@@ -14,8 +14,9 @@ Theory:
 Measurements:
     - Sag voltage (mV): V_steady_state - V_min
     - Sag ratio (dimensionless): sag_voltage / (V_baseline - V_min)
-      * 0 = no sag (no HCN channels)
-      * 1 = complete relaxation back to baseline
+            * With the current V_baseline definition (first-80 ms minimum),
+                this ratio is not constrained to [0, 1] and can exceed 1.
+    - Peak hyperpolarization (mV): V_rest - V_min
 """
 
 import pandas as pd
@@ -24,20 +25,19 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 
 
-def find_most_hyperpolarizing_sweep(analysis_parquet: pd.DataFrame):
+def find_negative_sweeps(analysis_parquet: pd.DataFrame, threshold_pA: float = 0):
     """
-    Find the sweep with the most negative injected current.
+    Find all sweeps with injected current below the threshold.
     
     Returns:
-        sweep number of the most hyperpolarizing current injection
+        List of sweep numbers with injected current below threshold
     """
 
-    # Find row with minimum current
-    idx = analysis_parquet['avg_injected_current_pA'].idxmin()
+    negative_sweeps = analysis_parquet[
+        analysis_parquet['avg_injected_current_pA'] < threshold_pA
+    ]['sweep'].tolist()
 
-    sweep = analysis_parquet.loc[idx, 'sweep']
-
-    return int(sweep)
+    return [int(sweep) for sweep in negative_sweeps]
 
 
 def measure_voltage_response(
@@ -141,9 +141,11 @@ def calculate_sag(voltage_response: dict) -> dict:
     Returns:
         Dictionary with:
         - 'sag_voltage_mV': Absolute sag (V_steady - V_min, in mV)
-        - 'sag_ratio': Normalized sag (0-1)
-                      0 = no recovery, 1 = complete recovery
+        - 'sag_ratio': Sag ratio using current baseline definition:
+                      sag_voltage / (v_baseline - v_min)
+                      Note: this value is not constrained to [0, 1]
         - 'sag_percent': Sag as percentage of total hyperpolarization
+        - 'peak_hyperpolarization_mV': Difference between resting Vm and V_min
     """
     if voltage_response is None:
         return None
@@ -183,7 +185,7 @@ def calculate_sag_for_bundle(
     verbose: bool = True
 ) -> dict:
     """
-    Calculate sag for the most hyperpolarizing sweep in a bundle.
+    Calculate sag for all negative-current sweeps in a bundle.
     
     Args:
         bundle_dir: Path to bundle directory
@@ -191,7 +193,7 @@ def calculate_sag_for_bundle(
     
     Returns:
         Dictionary with results:
-        - 'hyper_sweeps': List containing the most hyperpolarizing sweep
+        - 'hyper_sweeps': List of all sweeps with injected current below 0 pA
         - 'sag_results': Dict mapping sweep_num → sag measurements
         - 'summary': Summary statistics
     """
@@ -229,20 +231,17 @@ def calculate_sag_for_bundle(
                 sweep_config = config_data['sweeps']
 
     # -----------------------------
-    # Identify most hyperpolarizing sweep
+    # Identify all negative-current sweeps
     # -----------------------------
-    most_hyper_sweep = find_most_hyperpolarizing_sweep(analysis_data)
-    hyper_sweeps = [most_hyper_sweep]
+    hyper_sweeps = find_negative_sweeps(analysis_data, threshold_pA=0)
 
     if verbose:
-        current = analysis_data.loc[
-            analysis_data['sweep'] == most_hyper_sweep,
-            'avg_injected_current_pA'
-        ].iloc[0]
-
         print(f"\n[Sag Current Analysis]")
-        print(f"  Using most hyperpolarizing sweep:")
-        print(f"  Sweep {most_hyper_sweep} ({current:.0f} pA)")
+        print(f"  Using all negative-current sweeps (< 0 pA):")
+        if hyper_sweeps:
+            print(f"  Sweeps: {', '.join(str(sweep) for sweep in hyper_sweeps)}")
+        else:
+            print(f"  No sweeps found below 0 pA")
 
     # -----------------------------
     # Measure sag
@@ -263,6 +262,13 @@ def calculate_sag_for_bundle(
 
         sag_measurements = calculate_sag(voltage_response)
 
+        sweep_row = analysis_data[analysis_data['sweep'] == sweep]
+        resting_vm = sweep_row['resting_vm_mean_mV'].iloc[0]
+        peak_hyperpolarization = resting_vm - sag_measurements['v_min_mV']
+
+        sag_measurements['peak_hyperpolarization_mV'] = peak_hyperpolarization
+        sag_measurements['v_rest_mV'] = resting_vm
+
         sag_results[sweep] = sag_measurements
         sag_ratios.append(sag_measurements['sag_ratio'])
 
@@ -273,8 +279,10 @@ def calculate_sag_for_bundle(
 
             print(f"\n  Sweep {sweep} ({current:.0f} pA):")
             print(f"    V_baseline: {sag_measurements['v_baseline_mV']:.2f} mV")
+            print(f"    V_rest:     {sag_measurements['v_rest_mV']:.2f} mV")
             print(f"    V_min:      {sag_measurements['v_min_mV']:.2f} mV")
             print(f"    V_steady:   {sag_measurements['v_steady_mV']:.2f} mV")
+            print(f"    Peak hyperpolarization: {sag_measurements['peak_hyperpolarization_mV']:.2f} mV")
             print(f"    Sag voltage: {sag_measurements['sag_voltage_mV']:.2f} mV")
             print(f"    Sag ratio:   {sag_measurements['sag_ratio']:.3f} ({sag_measurements['sag_percent']:.1f}%)")
 
@@ -300,6 +308,7 @@ def calculate_sag_for_bundle(
 
             plot_sag_diagnostics(
                 bundle_dir,
+                sweep,
                 times,
                 voltages,
                 stimulus_start,
@@ -342,7 +351,7 @@ def calculate_sag_for_bundle(
 
 
 
-def plot_sag_diagnostics(bundle_path, times, voltages, stimulus_start, stimulus_end,
+def plot_sag_diagnostics(bundle_path, sweep, times, voltages, stimulus_start, stimulus_end,
                          v_baseline, v_min, v_steady):
 
     baseline_end = stimulus_start + 0.080
@@ -382,7 +391,7 @@ def plot_sag_diagnostics(bundle_path, times, voltages, stimulus_start, stimulus_
     plt.tight_layout()
     plot_dir = Path(bundle_path)
     plot_dir.mkdir(parents=True, exist_ok=True)
-    plt.savefig(plot_dir / "SagCurrent.jpeg", dpi=300)
+    plt.savefig(plot_dir / f"SagCurrent_sweep{sweep}.jpeg", dpi=300)
     plt.close()
 
 # FOR TESTING

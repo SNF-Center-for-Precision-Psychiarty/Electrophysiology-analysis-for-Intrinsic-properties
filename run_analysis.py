@@ -430,7 +430,7 @@ def replace_current_data_with_reference(bundle_dir: str, reference_bundle_dir: s
             avg_pa = avg_pa.set_index('sweep').combine_first(fallback.set_index('sweep')).reset_index()
 
         # Step 4: Round to nearest 5 pA (or 0)
-        avg_pa['avg_injected_current_pA_rounded'] = (_np.round(avg_pa['avg_injected_current_pA'] / 5) * 5).astype(float)
+        avg_pa['avg_injected_current_pA_rounded'] = (np.round(avg_pa['avg_injected_current_pA'] / 5) * 5).astype(float)
 
         # Step 5: Apply rounded mean to all rows in each sweep
         for _, row in avg_pa.iterrows():
@@ -660,58 +660,81 @@ def generate_summary_plot(bundle_dir: str):
             pdf.savefig(fig, dpi=150, bbox_inches='tight')
         plt.close(fig)
         
-        # PAGE 3: kept_sweeps_current and kept_sweeps_voltage (or kept_sweeps_stimulus and kept_sweeps_response for mixed protocol)
+        # PAGE 3+: kept sweep summaries
+        # If both single-protocol and mixed-protocol kept plots exist,
+        # render them on separate pages to avoid subplot overlap.
         kept_pa = p / "kept_sweeps_current.jpeg"
         kept_mv = p / "kept_sweeps_voltage.jpeg"
         kept_stim = p / "kept_sweeps_stimulus.jpeg"
         kept_resp = p / "kept_sweeps_response.jpeg"
-        
-        if kept_pa.exists() or kept_mv.exists() or kept_stim.exists() or kept_resp.exists():
+
+        def add_kept_sweeps_page(top_path, top_title, bottom_path, bottom_title, page_title):
+            if not (top_path.exists() or bottom_path.exists()):
+                return
+
             fig = plt.figure(figsize=(11, 11))
-            
-            # Single protocol (current/voltage)
-            if kept_pa.exists():
+
+            if top_path.exists():
                 ax1 = fig.add_subplot(2, 1, 1)
-                img1 = Image.open(kept_pa)
+                img1 = Image.open(top_path)
                 ax1.imshow(img1)
                 ax1.axis('off')
-                ax1.set_title("Kept Sweeps - Current", fontsize=12, fontweight='bold')
+                ax1.set_title(top_title, fontsize=12, fontweight='bold')
                 img1.close()
-            
-            if kept_mv.exists():
+
+            if bottom_path.exists():
                 ax2 = fig.add_subplot(2, 1, 2)
-                img2 = Image.open(kept_mv)
+                img2 = Image.open(bottom_path)
                 ax2.imshow(img2)
                 ax2.axis('off')
-                ax2.set_title("Kept Sweeps - Voltage", fontsize=12, fontweight='bold')
+                ax2.set_title(bottom_title, fontsize=12, fontweight='bold')
                 img2.close()
-            
-            # Mixed protocol (stimulus/response)
-            if kept_stim.exists():
-                ax1 = fig.add_subplot(2, 1, 1)
-                img1 = Image.open(kept_stim)
-                ax1.imshow(img1)
-                ax1.axis('off')
-                ax1.set_title("Kept Sweeps - Stimulus", fontsize=12, fontweight='bold')
-                img1.close()
-            
-            if kept_resp.exists():
-                ax2 = fig.add_subplot(2, 1, 2)
-                img2 = Image.open(kept_resp)
-                ax2.imshow(img2)
-                ax2.axis('off')
-                ax2.set_title("Kept Sweeps - Response", fontsize=12, fontweight='bold')
-                img2.close()
-            
-            plt.tight_layout()
+
+            fig.suptitle(page_title, fontsize=14, fontweight='bold')
+            plt.tight_layout(rect=[0, 0, 1, 0.97])
             pdf.savefig(fig, dpi=150, bbox_inches='tight')
             plt.close(fig)
+
+        has_single_kept = kept_pa.exists() or kept_mv.exists()
+        has_mixed_kept = kept_stim.exists() or kept_resp.exists()
+
+        if has_single_kept and has_mixed_kept:
+            add_kept_sweeps_page(
+                kept_pa,
+                "Kept Sweeps - Current",
+                kept_mv,
+                "Kept Sweeps - Voltage",
+                "Kept Sweeps (Current/Voltage)",
+            )
+            add_kept_sweeps_page(
+                kept_stim,
+                "Kept Sweeps - Stimulus",
+                kept_resp,
+                "Kept Sweeps - Response",
+                "Kept Sweeps (Stimulus/Response)",
+            )
+        elif has_single_kept:
+            add_kept_sweeps_page(
+                kept_pa,
+                "Kept Sweeps - Current",
+                kept_mv,
+                "Kept Sweeps - Voltage",
+                "Kept Sweeps (Current/Voltage)",
+            )
+        elif has_mixed_kept:
+            add_kept_sweeps_page(
+                kept_stim,
+                "Kept Sweeps - Stimulus",
+                kept_resp,
+                "Kept Sweeps - Response",
+                "Kept Sweeps (Stimulus/Response)",
+            )
         
         # PAGE 4: dropped_sweeps_current (or dropped_sweeps_stimulus for mixed protocol)
         dropped_pa = p / "dropped_sweeps_current.jpeg"
         dropped_stim = p / "dropped_sweeps_stimulus.jpeg"
         
-        if dropped_pa.exists() or dropped_stim.exists():
+        if (dropped_pa.exists() or dropped_stim.exists()):
             fig = plt.figure(figsize=(11, 8.5))
             ax = fig.add_subplot(111)
             
@@ -739,7 +762,7 @@ def generate_summary_plot(bundle_dir: str):
         dropped_mv = p / "dropped_sweeps_voltage.jpeg"
         dropped_resp = p / "dropped_sweeps_response.jpeg"
         
-        if dropped_mv.exists() or dropped_resp.exists():
+        if (dropped_mv.exists() or dropped_resp.exists()):
             fig = plt.figure(figsize=(11, 8.5))
             ax = fig.add_subplot(111)
             
@@ -1125,9 +1148,22 @@ def run_for_bundle(bundle_dir: str, reference_bundle_dir: str = None, skip_plots
         print(f"  Low sampling rate ({fs} Hz) detected")
         print(f"  Skipping low-pass filter (sampling rate below threshold)...")
     
+    # Use kept_sweeps from sweep_config for low-pass filtering when available
+    sweeps_to_filter = None
+    if isinstance(sweep_config, dict):
+        configured_kept = sweep_config.get("kept_sweeps", [])
+        if configured_kept:
+            sweeps_to_filter = configured_kept
+
     if filter_cutoff is not None and filter_cutoff < nyquist_freq:
         try:
-            filter_result = apply_lowpass_filter_to_bundle(bundle_dir, cutoff_hz=filter_cutoff, inplace=True, verbose=False)
+            filter_result = apply_lowpass_filter_to_bundle(
+                bundle_dir,
+                cutoff_hz=filter_cutoff,
+                sweeps_to_filter=sweeps_to_filter,
+                inplace=True,
+                verbose=False
+            )
             print(f"  ✓ Low-pass filter applied ({filter_cutoff/1000:.0f} kHz cutoff)")
             print(f"    - Filtered {filter_result['n_sweeps_mv']} voltage sweeps")
             print(f"    - Filtered {filter_result['n_sweeps_pa']} current sweeps")
@@ -1150,6 +1186,28 @@ def run_for_bundle(bundle_dir: str, reference_bundle_dir: str = None, skip_plots
     # Ensure sweep_config is a dict (None when no sweep_config.json exists)
     if sweep_config is None:
         sweep_config = {}
+
+    # Determine kept/dropped sweeps once, then reuse for plotting and analysis
+    kept_sweeps = sweep_config.get("kept_sweeps", [])
+    dropped_sweeps = sweep_config.get("dropped_sweeps", [])
+
+    # If no kept_sweeps defined, use all available sweeps
+    if not kept_sweeps:
+        kept_sweeps = sorted(df_mv["sweep"].unique().tolist())
+        if VERBOSE:
+            print(f"\n>>> No sweep filter defined - using all {len(kept_sweeps)} sweeps")
+    elif VERBOSE:
+        print(f"\n>>> Filtering to kept sweeps: {len(kept_sweeps)} sweeps")
+
+    # Generate kept/dropped sweep visualizations in Step 2 (configuration stage)
+    if not skip_plots:
+        print(f"  Generating kept/dropped sweep visualizations...")
+        try:
+            visualize_sweeps_from_parquet(bundle_dir, kept_sweeps, dropped_sweeps)
+            print(f"  ✓ Kept/dropped sweep visualizations created")
+        except Exception as e:
+            if VERBOSE:
+                print(f"  ⚠ WARNING: Failed to generate kept/dropped sweep visualizations: {e}")
     
     # Auto-skip the pause prompt for automated pipeline (no interactive input)
     # Check if we're running in non-interactive mode or with no_checkpoints flag
@@ -1176,28 +1234,6 @@ def run_for_bundle(bundle_dir: str, reference_bundle_dir: str = None, skip_plots
         print("\n[Auto] Proceeding with analysis (non-interactive mode)...")
     
     print(f"\n[Step 3] Resting membrane potential calculation...")
-    # Filter to only kept sweeps for all analysis
-    kept_sweeps = sweep_config.get("kept_sweeps", [])
-    dropped_sweeps = sweep_config.get("dropped_sweeps", [])
-    
-    # If no kept_sweeps defined, use all available sweeps
-    if not kept_sweeps:
-        kept_sweeps = sorted(df_mv["sweep"].unique().tolist())
-        if VERBOSE:
-            print(f"\n>>> No sweep filter defined - using all {len(kept_sweeps)} sweeps")
-    elif VERBOSE:
-        print(f"\n>>> Filtering to kept sweeps: {len(kept_sweeps)} sweeps")
-    
-    # Generate sweep visualizations if plots not skipped
-    if not skip_plots:
-        print(f"  Generating sweep visualizations...")
-        try:
-            visualize_sweeps_from_parquet(bundle_dir, kept_sweeps, dropped_sweeps)
-            print(f"  ✓ Sweep visualizations created")
-        except Exception as e:
-            if VERBOSE:
-                print(f"  ⚠ WARNING: Failed to generate sweep visualizations: {e}")
-    
     # Filter all dataframes to only include kept sweeps
     df_mv_kept = df_mv[df_mv["sweep"].isin(kept_sweeps)].copy()
     df_pa_kept = df_pa[df_pa["sweep"].isin(kept_sweeps)].copy()
@@ -1340,45 +1376,50 @@ def run_for_bundle(bundle_dir: str, reference_bundle_dir: str = None, skip_plots
 
     # STEP 7: Sag current analysis (HCN channel characterization)
     print(f"\n[Step 7] Sag current analysis (HCN channels)...")
-    print(f"  📊 Computing sag current from hyperpolarizing sweeps...")
+    print(f"  📊 Computing sag current from negative-current sweeps...")
     
     sag_results = calculate_sag_for_bundle(bundle_dir, verbose=True)
     
     if sag_results:
         # Add sag measurements to analysis.parquet
         df_analysis = pd.read_parquet(p / "analysis.parquet")
-        
+
         # Initialize columns with NaN
         df_analysis['sag_voltage_mV'] = np.nan
         df_analysis['sag_ratio'] = np.nan
         df_analysis['sag_percent'] = np.nan
-        
-        # Fill in values for hyperpolarizing sweeps
+        df_analysis['peak_hyperpolarization_mV'] = np.nan
+
+        # Fill in values for negative-current sweeps
         for sweep, measurements in sag_results['sag_results'].items():
             mask = df_analysis['sweep'] == sweep
             df_analysis.loc[mask, 'sag_voltage_mV'] = measurements['sag_voltage_mV']
             df_analysis.loc[mask, 'sag_ratio'] = measurements['sag_ratio']
             df_analysis.loc[mask, 'sag_percent'] = measurements['sag_percent']
-        
+            df_analysis.loc[mask, 'peak_hyperpolarization_mV'] = measurements['peak_hyperpolarization_mV']
+
         # Save updated analysis.parquet
         df_analysis.to_parquet(p / "analysis.parquet", index=False)
-        
+
         print(f"  ✓ Sag current analysis complete")
-        
+
         # STEP 7: After sag calculation
         print(f"\n{'='*70}")
         print("✓ STEP 7: SAG CURRENT ANALYSIS COMPLETE")
         print("="*70)
         if sag_results['summary']:
-            print(f"Hyperpolarizing sweeps analyzed: {len(sag_results['hyper_sweeps'])}")
+            print(f"Negative-current sweeps analyzed: {len(sag_results['hyper_sweeps'])}")
             print(f"Mean sag ratio: {sag_results['summary']['mean_sag_ratio']:.3f} ± {sag_results['summary']['std_sag_ratio']:.3f}")
-            print(f"Sag columns added to analysis.parquet:")
-            print(f"  - sag_voltage_mV: Absolute sag magnitude (mV)")
-            print(f"  - sag_ratio: Sag as fraction of hyperpolarization (≈1.0 = complete recovery)")
-            print(f"  - sag_percent: Sag as percentage")
+        else:
+            print(f"No negative-current sweeps found; sag columns were added as NaN values.")
+        print(f"Sag columns added to analysis.parquet:")
+        print(f"  - sag_voltage_mV: Absolute sag magnitude (mV)")
+        print(f"  - sag_ratio: Sag as fraction of hyperpolarization (≈1.0 = complete recovery)")
+        print(f"  - sag_percent: Sag as percentage")
+        print(f"  - peak_hyperpolarization_mV: V_rest - V_min (mV)")
         print()
     else:
-        print(f"  ⚠ No hyperpolarizing sweeps found - skipping sag analysis")
+        print(f"  ⚠ Sag analysis could not run - missing required files")
     
     if is_interactive and not no_checkpoints:
         # Pause/resume loop for sag inspection

@@ -560,9 +560,6 @@ def run_sav_gol(df, df_analysis, fs, bundle_path, sweep_config=None, skip_plots=
     df_vm_per_sweep["d_std"] = d_std
     df_vm_per_sweep["normalized_signal_variability"] = mean_metric
     df_vm_per_sweep = df_vm_per_sweep.merge(dvdt_means, on="sweep", how="left")
-
-
-    # Add this to the csv
     updated_analysis = df_analysis.merge(df_vm_per_sweep, on="sweep", how="left")
     
     # Sort by avg_injected_current_pA (ascending) before saving

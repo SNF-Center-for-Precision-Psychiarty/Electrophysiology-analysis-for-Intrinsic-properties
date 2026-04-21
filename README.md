@@ -21,7 +21,7 @@ The pipeline performs **sweep classification, spike detection, membrane property
 
 ---
 
-## 🧠 Overview
+## Overview
 
 This pipeline processes electrophysiology recordings to extract:
 
@@ -39,7 +39,7 @@ It is designed to handle **real-world noisy biological data**, including:
 
 ---
 
-## 📁 Supported File Types
+## Supported File Types
 
 ### NWB (Neurodata Without Borders)
 - Standardized neuroscience format
@@ -281,7 +281,7 @@ This standardization allows downstream analysis (spike detection, RMP, etc.) to 
 **Purpose**: Calculate membrane input resistance from hyperpolarizing current steps
 
 **What it does**:
-1. Identifies hyperpolarizing sweeps (negative current injection)
+1. Identifies negative-current sweeps (below 0 pA)
 2. Finds minimum voltage during stimulus (max hyperpolarization)
 3. Calculates ΔV (voltage deflection from baseline)
 4. Calculates R_input = ΔV / I_injected (Ohm's law)

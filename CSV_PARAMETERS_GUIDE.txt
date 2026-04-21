@@ -871,13 +871,14 @@ Significance:
 ---
 
 Parameter: sag_voltage_mV
-Location: sag_current.py, lines 130-180; run_analysis.py, line ~1000
+Location: sag_current.py; run_analysis.py
 Calculation:
-  - Identify hyperpolarizing sweeps: injected current < -10 pA
+  - Identify hyperpolarizing sweeps: injected current < 0 pA
   - For each hyperpolarizing sweep:
-    - V_baseline = mean(mV[baseline_start : baseline_end]) from sweep_config.json
+    - V_baseline = minimum voltage in first 80 ms of stimulus
     - V_min = minimum(mV[stimulus_start : stimulus_end])
-    - V_steady = mean(mV[stimulus_end-50ms : stimulus_end])
+    - V_steady = mean voltage in last 80 ms of stimulus,
+      with 1 ms buffer before stimulus end
   - Sag voltage = V_steady - V_min
   - For depolarizing sweeps: set to NaN (not applicable)
 What it means: The absolute magnitude of voltage recovery during hyperpolarization
@@ -898,34 +899,34 @@ Significance:
 ---
 
 Parameter: sag_ratio
-Location: sag_current.py, lines 165-170; run_analysis.py, line ~1000
+Location: sag_current.py; run_analysis.py
 Calculation:
   - For hyperpolarizing sweeps only:
     - total_hyperpol = V_baseline - V_min
     - sag_ratio = (V_steady - V_min) / (V_baseline - V_min)
-  - Normalizes sag to the total hyperpolarization
+  - Uses the pipeline's current V_baseline definition (first-80 ms minimum)
   - For depolarizing sweeps: set to NaN (not applicable)
-What it means: The fraction of hyperpolarization that is recovered by HCN channels
+What it means: Relative sag recovery using this pipeline's denominator (V_baseline - V_min)
 Electrophysiology context:
   - Ratio measures how much voltage relaxation occurs during stimulus
-  - Range interpretation:
-    * < 0.5: limited HCN activity (weak recovery)
-    * ≈ 1.0: complete recovery back to baseline
-    * > 1.5: strong HCN activity with overshoot past baseline
+  - Important implementation note:
+    * This ratio is NOT constrained to 0-1 in this pipeline
+    * Values > 1 can occur when (V_baseline - V_min) is small
+    * > 1 does not automatically imply overshoot past pre-stimulus resting Vm
   - Indicates balance between driving current and HCN channel conductance
-Units: dimensionless (ratio, 0-2+ range typical)
-Expected range: 0.5 to 1.5 (most neurons)
-Typical values: 0.9-1.1 for regular-spiking neurons
+Units: dimensionless ratio
+Expected range: dataset/method dependent; can exceed 1
+Typical values: compare within datasets processed with the same definition
 Significance:
   - PRIMARY sag metric for comparing across cells/conditions
-  - More robust than sag_voltage (normalized for current magnitude)
-  - Values near 1.0 indicate healthy HCN function
+  - More robust than sag_voltage for within-pipeline comparisons
+  - Interpret using one consistent calculation method across datasets
   - Used to classify neuron types and excitability properties
 
 ---
 
 Parameter: sag_percent
-Location: sag_current.py, line 171; run_analysis.py, line ~1000
+Location: sag_current.py; run_analysis.py
 Calculation:
   - sag_percent = sag_ratio * 100
   - Simply converts ratio to percentage (sag_ratio as %)
@@ -933,15 +934,14 @@ Calculation:
 What it means: Sag ratio expressed as a percentage for easier interpretation
 Electrophysiology context:
   - Same biological meaning as sag_ratio, just different units
-  - 100% = complete voltage recovery to baseline
-  - 50% = half recovery
-  - 150%+ = overshoot past baseline
+  - With current implementation, values can exceed 100%
+  - >100% does not automatically imply overshoot past pre-stimulus resting Vm
 Units: percent (%)
-Expected range: 50% to 150% (most neurons)
-Typical values: 90%-110% for regular-spiking neurons
+Expected range: dataset/method dependent; can exceed 100%
+Typical values: compare within datasets processed with the same definition
 Significance:
   - PREFERRED for reporting sag in publications
-  - Easier to interpret than ratio (e.g., 100% vs 1.0)
+  - Easier to interpret than ratio units (e.g., 120% vs 1.2)
   - Same information as sag_ratio, just rescaled
   - Use for graphing and presentation
 
@@ -963,12 +963,12 @@ QUALITY CONTROL PARAMETERS (assess recording quality):
   - normalized_signal_variability: acceptable if < 0.4 mV/s
   - frequency_post_filter: should be 0 Hz (no spontaneous baseline activity)
   - input_resistance: must have R² > 0.9; indicates seal quality
-  - sag_ratio: should be 0.9-1.1 for normal HCN function
+  - sag_ratio: evaluate relative to your cohort and this pipeline definition
 
 HCN CHANNEL PARAMETERS (characterize hyperpolarization response):
   - sag_voltage_mV: absolute recovery during hyperpolarization (2-15 mV typical)
-  - sag_ratio: normalized recovery (0.9-1.1 = normal, >1.5 = strong HCN activity)
-  - sag_percent: sag_ratio as percentage (90%-110% = normal function)
+  - sag_ratio: relative recovery metric; not bounded to 0-1 in this implementation
+  - sag_percent: sag_ratio as percentage; can exceed 100% in this implementation
 
 EXCITABILITY PARAMETERS (measure cell responsiveness):
   - current_threshold_pA: minimum current to evoke spike

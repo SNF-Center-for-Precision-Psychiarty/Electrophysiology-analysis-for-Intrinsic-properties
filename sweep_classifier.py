@@ -1799,7 +1799,20 @@ def visualize_sweeps_from_parquet(bundle_dir, kept_sweeps, dropped_sweeps):
         print(f"  ✓ Saved: {dropped_pa_path}")
         plot_paths.append(dropped_pa_path)
     else:
-        if VERBOSE: print(f"  ℹ No dropped sweeps to visualize")
+        if VERBOSE:
+            print(f"  ℹ No dropped sweeps to visualize")
+
+        # Remove stale dropped-sweep images from prior runs so summaries stay consistent
+        for stale_name in ("dropped_sweeps_voltage.jpeg", "dropped_sweeps_current.jpeg"):
+            stale_path = p / stale_name
+            if stale_path.exists():
+                try:
+                    stale_path.unlink()
+                    if VERBOSE:
+                        print(f"  ✓ Removed stale file: {stale_path.name}")
+                except OSError:
+                    if VERBOSE:
+                        print(f"  ⚠ Could not remove stale file: {stale_path.name}")
     
     # Combine all plots into a single PDF
     pdf_path = p / "all_plots_summary.pdf"
@@ -2084,7 +2097,20 @@ def visualize_mixed_protocol_sweeps(bundle_dir, kept_sweeps, dropped_sweeps):
         print(f"  ✓ Saved: {dropped_resp_path}")
         plot_paths.append(dropped_resp_path)
     else:
-        if VERBOSE: print(f"  ℹ No dropped sweeps to visualize")
+        if VERBOSE:
+            print(f"  ℹ No dropped sweeps to visualize")
+
+        # Remove stale dropped-sweep images from prior runs so summaries stay consistent
+        for stale_name in ("dropped_sweeps_stimulus.jpeg", "dropped_sweeps_response.jpeg"):
+            stale_path = p / stale_name
+            if stale_path.exists():
+                try:
+                    stale_path.unlink()
+                    if VERBOSE:
+                        print(f"  ✓ Removed stale file: {stale_path.name}")
+                except OSError:
+                    if VERBOSE:
+                        print(f"  ⚠ Could not remove stale file: {stale_path.name}")
     
     # Combine all plots into a single PDF
     pdf_path = p / "all_plots_summary.pdf"

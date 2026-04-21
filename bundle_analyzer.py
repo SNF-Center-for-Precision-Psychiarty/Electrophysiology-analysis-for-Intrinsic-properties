@@ -68,6 +68,11 @@ def main():
         action="store_true",
         help="Skip generating plots for faster analysis"
     )
+    parser.add_argument(
+        "--no-checkpoints",
+        action="store_true",
+        help="Skip interactive checkpoint prompts during analysis"
+    )
     
     args = parser.parse_args()
     
@@ -171,7 +176,11 @@ def main():
     print(f"  ⚡ Starting analysis...")
     
     try:
-        run_for_bundle(str(bundle_path), skip_plots=args.skip_plots)
+        run_for_bundle(
+            str(bundle_path),
+            skip_plots=args.skip_plots,
+            no_checkpoints=args.no_checkpoints,
+        )
         print(f"  ✓ Finished bundle: {bundle_path.name}")
     except Exception as e:
         import traceback
