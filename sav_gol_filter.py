@@ -569,7 +569,7 @@ def run_sav_gol(df, df_analysis, fs, bundle_path, sweep_config=None, skip_plots=
     updated_analysis.to_parquet(bundle_path / "analysis.parquet", index=False)
     updated_analysis.to_csv(bundle_path / "analysis.csv", index=False)
 
-    # Get averaged across all sweeps, add to manifest 
+    # Get filtered grand averaged resting vm across all sweeps, add to manifest 
     avg_rmp = df_vm_per_sweep["filtered_resting_vm_mean_mV"].mean()
     print(f"Average RMP: {avg_rmp:.2f} mV")
 

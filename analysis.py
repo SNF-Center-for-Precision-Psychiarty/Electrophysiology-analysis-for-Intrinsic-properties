@@ -25,19 +25,14 @@ def resting_vm_per_sweep(df_mv: pd.DataFrame, sweep_config: Optional[dict] = Non
            sweep_config: optional dict from sweep_config.json with baseline window per sweep
            bundle_dir: optional path to bundle (used to detect if mixed protocol)
     Returns: one row per sweep with mean resting Vm (mV).
-    
-    IMPORTANT: For MIXED PROTOCOL files only:
-    sweep_config.json uses RELATIVE times per sweep (0-27s)
-    but the parquet files use ABSOLUTE times (all sweeps concatenated, e.g., 278-1856s)
-    This function converts relative times to absolute times for mixed protocol files.
     """
-    baseline = df_mv
+    baseline = df_mv  # input data; kept for readability
     
     # sweep_config is required to determine baseline windows
     if not sweep_config:
         raise ValueError("sweep_config is required to determine baseline windows for each sweep")
     
-    # Detect if mixed protocol
+    # Detect if mixed protocol (informational; not used in computation)
     is_mixed = False
     if bundle_dir:
         try:
@@ -47,20 +42,10 @@ def resting_vm_per_sweep(df_mv: pd.DataFrame, sweep_config: Optional[dict] = Non
         except:
             is_mixed = False
     
-    # For mixed protocol, pre-compute absolute time offsets for each sweep
-    sweep_offsets = {}
-    if is_mixed:
-        for sweep_id in df_mv["sweep"].unique():
-            sweep_data = df_mv[df_mv["sweep"] == sweep_id]
-            if len(sweep_data) > 0:
-                sweep_offsets[int(sweep_id)] = sweep_data["t_s"].min()
-    
-    # VECTORIZED APPROACH: Filter by baseline window for each sweep
-    # Instead of using slow apply(), build a list of filtered DataFrames per sweep
+    # Filter by baseline window per sweep by collecting filtered slices then concatenating
     baseline_dfs = []
     
     for sweep_id in df_mv["sweep"].unique():
-        # Get config key (try both int and str)
         try:
             key = int(sweep_id)
             if key not in sweep_config["sweeps"]:
@@ -72,7 +57,7 @@ def resting_vm_per_sweep(df_mv: pd.DataFrame, sweep_config: Optional[dict] = Non
         if key not in sweep_config["sweeps"]:
             continue
         
-        # Get baseline window for this sweep
+        # Get baseline window for this sweep (pre‑stimulus)
         try:
             windows = sweep_config["sweeps"][key]["windows"]
             t_baseline_start = windows["baseline_start_s"]
@@ -80,11 +65,7 @@ def resting_vm_per_sweep(df_mv: pd.DataFrame, sweep_config: Optional[dict] = Non
         except KeyError:
             continue
         
-        # For mixed protocol, times are already absolute (use directly)
-        # For single protocol, times are relative (also use directly)
-        # No conversion needed!
-        
-        # Filter this sweep's data to baseline window
+        # Filter this sweep's data to the baseline window
         sweep_data = df_mv[df_mv["sweep"] == sweep_id]
         sweep_baseline = sweep_data[
             (sweep_data["t_s"] >= t_baseline_start) & 
@@ -94,13 +75,14 @@ def resting_vm_per_sweep(df_mv: pd.DataFrame, sweep_config: Optional[dict] = Non
         if len(sweep_baseline) > 0:
             baseline_dfs.append(sweep_baseline)
     
-    # Combine all baseline data
+    # Combine all baseline data across sweeps
     if not baseline_dfs:
         # No baseline data found, return empty DataFrame
         return pd.DataFrame(columns=["sweep", "resting_vm_mean_mV"])
     
     baseline_filtered = pd.concat(baseline_dfs, ignore_index=True)
 
+    # Compute mean Vm per sweep during baseline window
     agg = (baseline_filtered
            .groupby("sweep", as_index=False)["value"]
            .mean()

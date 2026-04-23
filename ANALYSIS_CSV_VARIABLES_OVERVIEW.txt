@@ -1,0 +1,142 @@
+Analysis CSV per-sweep variables overview
+Per-sweep numeric variables: 43 fixed metrics plus 2×n_bins dynamic bin columns (bin_*_spike_count and bin_*_cv_isi).
+
+GROUP 1:
+Resting membrane potential
+run_analysis.py (line 1247)
+How it’s computed: mean of the mV signal within each sweep’s baseline window (baseline_start_s → baseline_end_s from sweep_config.json).
+Assumption: the baseline window is truly pre‑stimulus and stable, so its mean reflects the resting membrane potential for that sweep.
+
+GROUP 2:
+Spike detection (per‑peak → per‑sweep averages)
+spike_detection_new.py (per‑peak calculations ~lines 520–740; per‑sweep averages ~lines 1141–1156)
+
+High‑level flow (plain English):
+1) For each sweep, the code detects peaks (spikes) in the stimulus window.
+2) For each detected peak, it builds two small windows:
+	 • Window 1 (upstroke): a few ms before the peak up to the peak.
+	 • Window 2 (downstroke): from the peak to the next peak (or ~20 ms after).
+3) It computes dV/dt (slope) inside each window using np.gradient.
+4) It derives per‑peak values (threshold, peak, upstroke, etc.).
+5) It averages those per‑peak values across all valid peaks in the sweep.
+
+Key per‑peak points (intuition + how they’re computed):
+- Peak voltage (v_peak): the voltage at the detected peak index.
+- Upstroke point (t_upstroke, v_upstroke): the time/voltage where dV/dt is maximal in Window 1 (steepest rise).
+- Threshold point (t_threshold, v_threshold): compute a dV/dt threshold = threshold_percent × max_dvdt,
+	then take the first index in Window 1 where dV/dt crosses that value. This marks the start of the fast rise.
+
+Index/time conversion note:
+- The “max dV/dt” index and “threshold” index are found inside Window 1 (relative to that small slice).
+- We convert back to the full sweep by adding w1_start_idx, then use time[abs_idx] and voltage[abs_idx].
+	That gives the true sweep‑level time/voltage.
+
+Listed metrics (per‑sweep averages):
+- avg_peak_voltage_mV: average of each peak’s v_peak.
+- avg_threshold_voltage_mV: average of each peak’s v_threshold.
+- avg_threshold_to_peak_mV: average of (v_peak − v_threshold).
+- avg_threshold_to_peak_ms: average of (t_peak − t_threshold) in ms.
+- avg_upstroke_mVms: average of max dV/dt in Window 1 (steepest rise, mV/ms).
+- avg_upstroke_to_peak_ms: average of (t_peak − t_upstroke) in ms.
+- avg_upstroke_to_peak_mV: average of (v_peak − v_upstroke).
+- avg_downstroke_mVms: average of min dV/dt in Window 2 (steepest rise, mV/ms)
+- avg_peak_to_downstroke_ms: average of (t_peak − t_downstroke)
+- avg_peak_to_trough_ms: average of (t_peak − t_fast_trough)
+- avg_peak_to_trough_mV: average of (v_peak − v_fast_trough)
+- avg_fast_trough_at_hyperpolarization_mV: average of fast trough value (mV)
+- avg_threshold_fast_trough_width_ms: average of (t_fast_trough - t_threshold)
+- avg_height_mV: average of (v_peak - v_fast_trough)
+- avg_half_height_mV: average of voltage value halfway between peak and fast trough (v_fast_trough + 0.5*height_mV)
+- avg_ap_width_ms: average of (t_half_height_down - t_half_height_up)
+- avg_upstroke_downstroke_ratio: average of (max dvdt / abs(min dvdt))
+- spike_frequency_Hz: averaged firing rate over the analysis window (len(peak_voltages)/(t_max-t_min))
+- mean_isi_ms: Average time between spikes 
+- cv_isi: How regular the firing is (std(isi)/mean(isi)) (0 = very regular)
+- middle_first_AP_width_ratio: average of ratio of ap_width between middle and first AP
+- middle_first_AP_peak_threshold_ratio: average of ratio of (v_peak - v_threshold) between middle and first AP
+- middle_first_AP_fast_trough_ratio: average of ratio of v_fast_trough between middle and first AP 
+- last_first_AP_width_ratio: average of ratio of ap_width between last and first AP 
+- last_first_AP_peak_threshold_ratio: average of ratio of (v_peak-v_threshold) between last and first AP 
+- last_first_AP_fast_trough_ratio: average of ratio of v_fast_trough between last and first AP 
+- avg_injected_current_pA: average of injected current during stimulus period (pA)
+
+GROUP 3:
+Kink detection (per‑peak → per‑sweep averages)
+kink_detection.py
+
+High‑level flow (plain English):
+1. Find the main upstroke
+2. Find candidate dV/dt peaks between threshold and max upstroke, 
+   - Use both find_peaks and finding all local maxima in window
+   - Compute per candidate: height, ratio to max upstroke, prominence, post-dip ratio, interval to main upstroke (ms), width, and sign changes
+   - Key Terms: 
+     - Prominence: how much a peak sticks out from surroundings
+	 - Post dip ratio: how much the signal drops after the kink before rising again ((kink height - lowest point after kink) / max_upstroke)
+	 - Width: width at half-height of the kink in dV/dt
+	 - Sign changes: How many times the signal wiggles up and down after the kink (indicative of noise)
+
+3. Combine candidates from both methods (union)
+4. Remove noisy / fluctuation-like peaks (anti-wiggle filter)
+5. Stage 1: strict rule-based selection
+- Filters for kink ratio, prominence, post-dip ratio, and interval
+- Pick strongest candidate with the max height
+6. Optional Stage 2 selection with relaxed thresholds 
+
+
+Listed metrics (per‑sweep averages):
+- pct_spikes_with_kink: average of % of spikes that have a pre-upstroke dV/dt peak (“kink”)
+- avg_kink_interval_ms: average of (t_max_dvdt - t_kink_peak)
+- avg_kink_ratio: average of (kink_dvdt_peak / max_dvdt)
+- avg_kink_height_dVdt: average of kink_dvdt_peak (mV/ms)
+
+GROUP 4:
+Sav Gol Filtering (per-sweep and per‑cell averages)
+sav_gol.py
+Note: Sav gol filter is applied ONLY on the baseline period
+
+Listed metrics (per-sweep averages):
+- filtered_resting_vm_mean_mV: Average resting membrane potential after Savitzky-Golay filtering
+- frequency_pre_filter: Spike frequency before filtering over the baseline period
+- frequency_post_filter: Spike frequency after filtering over the baseline period
+
+Listed metrics (per-cell averages:)
+- drift_range: Average of total voltage range across baseline (max - min) after Savitzky-Golay filtering
+- d_std: Average of standard deviation of baseline voltage after Savitzky-Golay filtering
+- normalized_signal_variability: How much the signal changes over time, normalized by duration, after Savitzky-Golay filtering
+  - Split each sweep into fixed windows and compute the mean voltage
+  - Compute absolute difference between consecutive windows and sum
+  - Normalize by time (baseline duration)
+  - Average across all sweeps
+- filtered_RMP_derivative: Average slope (dV/dt) of baseline voltage over time after Savitzky-Golay filtering
+  - Split each sweep into fixed windows
+  - Compute mean voltage for each window
+  - Compute gradient of these mean values over time (window size)
+
+Group 5:
+Sag Current (per-sweep average)
+sag_current.py
+Note: Sag is only computed for negative current sweeps, which should have no spikes
+Key variables:
+- v_baseline: most negative point in first 80 seconds of stimulus period
+- v_min: most negative point in stimulus period (peak hyperpolarization)
+- v_steady: averaged voltage in last 80 seconds of stimulus period
+
+Listed metrics (per-sweep averages for negative currents only):
+- sag_voltage_mV: How much the neuron recovered from the deepest point (v_steady - v_min)
+- sag_ratio: Fraction of how much of the extra drop (baseline -> min) is recovered by the end (v_steady - v_min) / (v_baseline - v_min)
+- sag_percent: sag_ratio * 100
+- peak_hyperpolarization_mV: How much additional drop happened after the initial response (v_baseline - v_min)
+
+Group 6:
+Other cell-level metrics
+- input_resistance: input_resistance.py (line 22)
+- grand_average_resting_vm: run_analysis.py (line 1248)
+- filtered_grand_average_resting_vm: sav_gol_filter.py (line 573)
+- current_threshold_pA: spike_detection_new.py (line 1568)
+
+Listed metrics (defined cell-level):
+- input_resistance: Apply Ohm's law to compute slope of I-V curve (over averaged voltage and averaged current) within stimulus period for first 8 sweeps with no spikes
+  Quality metric: R² > 0.9 required for reliable result
+- grand_average_resting_vm: Average of resting_vm_mean_mV across ALL sweeps in recording  
+- filtered_grand_average_resting_vm: Average of filtered_resting_vm_mean_mV across ALL sweeps after Savitzky-Golay filtering
+- current_threshold_pA: Minimum injected current needed to evoke at least one spike (excitability measure)

@@ -123,17 +123,17 @@ def smooth_negative_current_stimulus(
     return voltage_filtered
 
 def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced=False, analysis_windows=None, sweep_config=None, skip_plots=False):
-    # Use parameters from centralized config
+    # Use global config values so the same thresholds are used everywhere
     pre_threshold_window_ms = PRE_THRESHOLD_WINDOW_MS
     post_threshold_window_ms = POST_THRESHOLD_WINDOW_MS
     threshold_percent = THRESHOLD_PERCENT
     fast_trough_percent = FAST_TROUGH_PERCENT
 
-    #threshold window in seconds
+    # Threshold windows in seconds (used for slicing around each spike)
     pre_s = PRE_THRESHOLD_WINDOW_S
     post_s = POST_THRESHOLD_WINDOW_S
 
-    # Detect if mixed protocol
+    # Detect if this file is mixed protocol (stimulus timing can vary per sweep)
     p = Path(bundle_path)
     try:
         manifest = json.loads((p / "manifest.json").read_text())
@@ -143,8 +143,8 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
     
     # Build analysis_windows from sweep_config if available and not already provided
     if analysis_windows is None and sweep_config is not None:
-        # For mixed protocol, we'll calculate windows per-sweep in the loop
-        # For single protocol, extract a reference window now
+    # For mixed protocol, we will still use per-sweep windows later (absolute times)
+    # For single protocol, extract a reference window now
         try:
             # Find first valid sweep for reference
             valid_sweep = None
@@ -175,7 +175,7 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
             print("  Falling back to hardcoded defaults")
 
     # Main analysis windows (in seconds)
-    # analysis_windows is required to define spike detection parameters
+    # These are treated as ABSOLUTE times for analysis
     if analysis_windows is None:
         raise ValueError("analysis_windows is required for spike detection. "
                         "Must be provided or calculated from sweep_config.")
@@ -186,7 +186,7 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
         print(f"Using stimulus windows:")
         print(f"  Stimulus period: [{t_stim_start:.6f}, {t_stim_end:.6f}] s")
 
-    # Handle sampling rate for mixed vs single protocol
+    # Handle sampling rate (mixed protocol can have per‑sweep sample rates)
     # For mixed protocol: fs might be a list like ['200000.0', '50000.0']
     # For single protocol: fs is a single number
     if isinstance(fs, list):
@@ -199,23 +199,23 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
         # Single protocol: use the single rate
         fs_default = float(fs)
     
-    # This will be used for analysis (full window)
+    # Convert pre/post windows from seconds to sample counts
     pre_samples = int(pre_s * fs_default)
     post_samples = int(post_s * fs_default)
     
-    # Separate plotting window (shorter post-spike for cleaner visualization)
+    # Separate plotting window (shorter tail for cleaner visuals)
     post_s_plot = POST_THRESHOLD_WINDOW_PLOT_S
     post_samples_plot = int(post_s_plot * fs_default)
 
 
-    # Don't pre-filter all data; instead filter per-sweep to handle mixed protocol time offsets
-    peak_level_data = {} #{ap_index: {} for ap_index in range(200)}
+    # Prepare containers for sweep‑level and peak‑level results
+    peak_level_data = {}
     max_peaks_overall = 0
     sweep_results = []
     filtered_peaks = {}
     total_struggling_kink_skips = 0
 
-    # Remove stale kink diagnostics from previous runs so output reflects current settings only
+    # Remove stale kink diagnostics so plots reflect only this run
     kink_plot_dir = Path(bundle_path) / "Kink_Diagnostics"
     if kink_plot_dir.exists():
         for old_plot in kink_plot_dir.glob("kink_spike_sweep*.jpeg"):
@@ -226,10 +226,10 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
 
     if VERBOSE: print("RUNNING SPIKE DETECTION")
     
-    # Get unique sweeps
+    # Get list of all sweeps present in the data
     unique_sweeps = sorted(df["sweep"].unique())
     
-    # Load manifest to get per-sweep sampling rates (ONLY for mixed protocol)
+    # Load per‑sweep sampling rates for mixed protocol (if available)
     per_sweep_rates = {}
     if is_mixed:
         try:
@@ -247,7 +247,7 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
         #      continue
         if VERBOSE: print("SWEEP NUMBER:", sweep_number)
         
-        # Get sampling rate for this sweep (ONLY different for mixed protocol)
+    # Get sampling rate for this sweep (may vary in mixed protocol)
         if is_mixed and sweep_number in per_sweep_rates:
             sweep_fs = per_sweep_rates[sweep_number]
             if VERBOSE: print(f"  Using sweep-specific rate: {sweep_fs} Hz")
@@ -262,10 +262,10 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
             sweep_post_samples = post_samples
             sweep_post_samples_plot = post_samples_plot
         
-        # Get data for this sweep
+    # Slice the full table down to this sweep only
         group = df[df["sweep"] == sweep_number].sort_values("t_s")
         
-        # For mixed protocol, get THIS SWEEP's specific time windows from sweep_config
+    # For mixed protocol, get THIS sweep’s stimulus window from sweep_config (absolute times)
         if is_mixed and sweep_config is not None:
             try:
                 # Get this sweep's config
@@ -308,10 +308,10 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
             sweep_t_start = t_stim_start - pre_s
             sweep_t_end = t_stim_end + post_s
         
-        # Filter this sweep's data to the analysis window
+    # Keep only the stimulus window for spike detection (absolute times)
         group_window = group[(group["t_s"] >= sweep_t_min) & (group["t_s"] <= sweep_t_max)].reset_index(drop=True)
         
-        # Skip if no data in this window
+        # Skip this sweep if the stimulus window is empty
         if len(group_window) == 0:
             dbg(f"  WARNING: No data in analysis window for sweep {sweep_number}, skipping.")
             continue
@@ -321,7 +321,7 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
         voltage = group["value"].to_numpy()
 
         stimulus_level_pA = None
-        # Get stimulus level from sweep_config
+        # Try to read the injected current level for this sweep
         if sweep_config is not None:
             try:
                 stimulus_level_pA = sweep_config["sweeps"][str(sweep_number)].get("stimulus_level_pA", None)
@@ -330,8 +330,7 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
             except (KeyError, TypeError):
                 stimulus_level_pA = None
         
-        # Apply Savitzky-Golay smoothing to stimulus period if negative current detected
-        # This removes artifactual spikes from cultured cell firing behavior
+        # Optionally smooth negative‑current stimulus to reduce artifacts
         smoothing_plot_dir = None
         if not skip_plots:
             smoothing_plot_dir = Path(bundle_path) / "Negative_Current_Smoothing"
@@ -346,18 +345,14 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
             sweep_number=sweep_number,
         )
 
-        # dV/dt in mV/ms
-        #dvdt = np.gradient(voltage, time) * 1000
-
-        # Detect peaks in this sweep
+        # Detect candidate peaks (spikes) in this sweep
         peaks, props = find_peaks(
             voltage,
             height=PEAK_HEIGHT_THRESHOLD,
             prominence=PEAK_PROMINENCE
         )
 
-        # Filter out peaks that are too close together (within 2ms of previous peak)
-        # This removes duplicate detections from noise
+        # Filter out peaks that are too close together (remove duplicates/noise)
         filtered_peaks_list = []
         
         for peak_idx in peaks:
@@ -400,37 +395,34 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
         segment_success_count = 0
         segment_fail_count = 0
         
-        # Estimate resting potential from pre-stimulus baseline
-        # Use first 50ms before stimulus starts (robust baseline estimate)
-        baseline_duration_s = 0.05  # 50ms of pre-stimulus data
+    # Estimate resting potential from 50 ms pre‑stimulus baseline
+        baseline_duration_s = 0.05  
         baseline_end_time = t_stim_start
         baseline_start_time = max(time[0], baseline_end_time - baseline_duration_s)
         
-        # Find indices in pre-stimulus baseline window
+    # Find indices that fall inside the baseline window
         baseline_indices = np.where((time >= baseline_start_time) & (time <= baseline_end_time))[0]
         
         if len(baseline_indices) > 0:
-            # Use median (robust to noise/outliers) instead of mean
+            # Use median (robust to noise/outliers)
             v_resting = np.median(voltage[baseline_indices])
             if VERBOSE:
                 print(f"  ✓ Baseline estimation: {len(baseline_indices)} samples from {baseline_start_time:.6f}s to {baseline_end_time:.6f}s")
                 print(f"    Resting potential (median): {v_resting:.2f} mV")
         else:
-            # Fallback: use first 100 samples as baseline if no pre-stimulus window
+            # Fallback: use first 100 samples if no baseline window found
             v_resting = np.median(voltage[:min(100, len(voltage))])
             if VERBOSE:
                 print(f"  ⚠ No pre-stimulus window found. Using first 100 samples for baseline")
                 print(f"    Resting potential (median): {v_resting:.2f} mV")
         
-        # Pre-calculate spike amplitudes for struggling cell detection
-        # (needed before processing peaks to identify weak spikes at end of sweep)
+    # Pre‑calculate spike amplitudes to detect weak/struggling spikes
         spike_amplitudes = []
         for peak_idx in peaks:
             peak_idx = int(peak_idx)
             v_peak_temp = float(voltage[peak_idx])
             
-            # Calculate amplitude from peak to resting potential
-            # This is more stable than looking at local minimum before peak
+            # Amplitude = peak voltage minus resting baseline
             amplitude = v_peak_temp - v_resting
             spike_amplitudes.append(amplitude)
         
@@ -438,7 +430,7 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
             print(f"  ✓ Spike amplitudes calculated (n={len(spike_amplitudes)})")
             print(f"    Range: {np.min(spike_amplitudes):.2f} to {np.max(spike_amplitudes):.2f} mV")
             print(f"    Median: {np.median(spike_amplitudes):.2f} mV")
-
+        # Loop through each detected peak and compute per‑peak features
         for i, peak in enumerate(peaks):
             # FOR DEBUGGING, IGNORE
             # if i !=42:
@@ -448,19 +440,14 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
             v_peak = float(voltage[peak])
             if VERBOSE: print(f"  peak {i}: index {peak}, t={t_peak:.6f}s, v={v_peak:.2f}mV")
 
-            # Exclude peaks that fall outside the stimulus window for THIS sweep
-            # Note: Peaks are from the sweep-specific window, so should be within it
+            # Skip peaks outside the stimulus window (should be rare)
             if (t_peak < sweep_t_min) or (t_peak > sweep_t_max):
                 if VERBOSE: print(f"    INFO: peak at {t_peak:.6f}s outside stimulus window [{sweep_t_min:.6f}, {sweep_t_max:.6f}], skipping.")
                 continue
 
             # ---------------------------
-            # Define Window 1 (upstroke)
-            #   from max(t_peak - 4.5ms, sweep_start)
-            #   up to the peak
-            # Define Window 2 (downstroke)
-            #   from peak to next peak
-            #   or peak to t_peak + 20ms if last peak
+            # Window 1 (upstroke): just before the peak → peak
+            # Window 2 (downstroke): peak → next peak (or ~20 ms after)
             # ---------------------------
             t_start_w1 = max(time[peak] - pre_s, float(time[0])) # whichever one is higher
 
@@ -475,7 +462,7 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
                 t_end_w2 = min(time[peak] + post_s, float(time[-1]))
                 w2_end_idx   = int(np.searchsorted(time, t_end_w2, side="right"))
 
-            # Convert times to indices
+            # Convert window times to array indices for slicing
             w1_start_idx = int(np.searchsorted(time, t_start_w1, side="left"))
             w1_end_idx   = peak + 1
             w2_start_idx = peak + 1
@@ -484,7 +471,7 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
                 dbg("    WARNING: invalid window for this peak, skipping.")
                 continue
 
-            # Extract segments
+            # Extract voltage/time segments for each window
             t_up = time[w1_start_idx:w1_end_idx]
             v_up = voltage[w1_start_idx:w1_end_idx]
             dvdt_up = np.gradient(v_up, t_up) * 1000
@@ -495,8 +482,7 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
             dvdt_down = np.gradient(v_down, t_down) * 1000
             #dvdt_down = dvdt[w2_start_idx:w2_end_idx]
 
-            # Segment for averaging (use sweep-specific sample counts)
-            # Use plotting window (shorter) instead of analysis window
+            # Build a short voltage snippet around the peak (for averaging/plots)
             plot_start = peak - sweep_pre_samples
             plot_end   = peak + sweep_post_samples_plot
             
@@ -512,7 +498,7 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
                 print(f"        Peak time: {t_peak:.6f}s, Voltage: {v_peak:.2f}mV")
                 print(f"        This peak will still be analyzed for all other metrics (threshold, width, etc.).")
 
-            # Initialize metrics for this peak
+            # Initialize per‑peak metrics (filled below)
             t_threshold = np.nan
             v_threshold = np.nan
             t_upstroke  = np.nan
@@ -533,10 +519,10 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
             upstroke_downstroke_ratio = np.nan
 
             # -------------------------
-            # Window 1: threshold & upstroke
+            # Window 1: compute upstroke and threshold
             # -------------------------
             if len(dvdt_up) > 0:
-                # Max upstroke in W1
+                # Max upstroke = steepest rise (max dV/dt)
                 max_dvdt_value = float(np.max(dvdt_up))
                 up_rel_idx = int(np.argmax(dvdt_up))
                 up_idx = w1_start_idx + up_rel_idx
@@ -546,7 +532,7 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
                 peak_max_dvdt_time_difference = t_peak - t_upstroke
                 peak_max_dvdt_voltage_difference = v_peak - v_upstroke
 
-                # Threshold: last time dv/dt is still below threshold% of max
+                # Threshold = first time dV/dt crosses a fraction of max upstroke
                 thr_value = threshold_percent * max_dvdt_value
                 below = np.where(dvdt_up >= thr_value)[0]
                 if len(below) > 0:
@@ -564,7 +550,7 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
                 print("    WARNING: empty dvdt_up for this peak.")
 
             # -------------------------
-            # Window 2: downstroke & fast trough
+            # Window 2: compute downstroke and fast trough
             # -------------------------
             if len(dvdt_down) > 0:
                 # Max downstroke (most negative dv/dt)
@@ -717,7 +703,7 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
                     peak_idx,
                     Path(bundle_path) / "Kink_Diagnostics",
                     f"sweep{sweep_number}_peak{i}"
-            )
+                )
 
             # Collect per-peak metrics
             peak_voltages.append(v_peak)
@@ -728,8 +714,8 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
             upstroke_to_peak_times.append(peak_max_dvdt_time_difference)
             upstroke_to_peak_voltages.append(peak_max_dvdt_voltage_difference)
             peak_to_downstroke_times.append(min_dvdt_peak_time_difference)
-            peak_to_trough_times_ms.append(peak_to_trough_time_ms)  
-            peak_to_trough_heights_mV.append(peak_to_trough_height_mV)  
+            peak_to_trough_times_ms.append(peak_to_trough_time_ms)
+            peak_to_trough_heights_mV.append(peak_to_trough_height_mV)
             half_heights.append(half_height)
             heights.append(height)
             threshold_fast_trough_widths.append(threshold_fast_trough_width)
@@ -737,59 +723,59 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
             upstrokes.append(max_dvdt_value)
             downstrokes.append(min_dvdt_value)
             up_down_ratios.append(upstroke_downstroke_ratio)
-            
+
             # Append kink metrics
             kink_counts.append(kink_metrics['num_kinks'])
             kink_intervals_ms.append(kink_metrics['kink_interval_ms'])
             kink_ratios.append(kink_metrics['kink_ratio'])
             kink_heights.append(kink_metrics['kink_height_dvdt'])
-            
+
             # If we have gotten this far, it has passed all checks and is a valid peak
             valid_peaks.append(peak)  # Store original peak index for ISI calculation
             # Only peaks that survived the filters (valid peaks) contribute to the segment
             if segment is not None:
                 valid_spike_segments.append(segment)
 
-        # Store peak TIMES (in absolute seconds), not indices, for robust plotting
-        # This avoids index confusion between filtered and full sweep data
-        valid_peak_times = time[valid_peaks] if len(valid_peaks) > 0 else []
-        filtered_peaks[sweep_number] = (valid_peaks, valid_peak_times)
-        max_peaks_overall = max(max_peaks_overall, len(valid_peaks))
+    # Store peak TIMES (in absolute seconds), not indices, for robust plotting
+    # This avoids index confusion between filtered and full sweep data
+    valid_peak_times = time[valid_peaks] if len(valid_peaks) > 0 else []
+    filtered_peaks[sweep_number] = (valid_peaks, valid_peak_times)
+    max_peaks_overall = max(max_peaks_overall, len(valid_peaks))
 
-        # Morphology on how AP changes
-        ratio_middle_first_width = np.nan
-        ratio_middle_first_threshold_to_peak = np.nan
-        ratio_middle_first_fast_trough = np.nan
-        ratio_last_first_width = np.nan
-        ratio_last_first_threshold_to_peak = np.nan
-        ratio_last_first_fast_trough = np.nan
+    # Morphology on how AP changes
+    ratio_middle_first_width = np.nan
+    ratio_middle_first_threshold_to_peak = np.nan
+    ratio_middle_first_fast_trough = np.nan
+    ratio_last_first_width = np.nan
+    ratio_last_first_threshold_to_peak = np.nan
+    ratio_last_first_fast_trough = np.nan
 
-        if len(valid_peaks) >=3:
-            def get_peak_metrics(idx: int):
-                return (
-                    ap_widths[idx],
-                    threshold_to_peak_voltages[idx],
-                    fast_trough_voltages[idx],
-                )
-            
-            first_idx = 0
-            middle_idx = floor(len(valid_peaks)/2)
-            last_idx = -1
+    if len(valid_peaks) >= 3:
+        def get_peak_metrics(idx: int):
+            return (
+                ap_widths[idx],
+                threshold_to_peak_voltages[idx],
+                fast_trough_voltages[idx],
+            )
+        
+        first_idx = 0
+        middle_idx = floor(len(valid_peaks)/2)
+        last_idx = -1
 
-            first_width, first_thr2peak, first_trough = get_peak_metrics(first_idx)
-            mid_width,   mid_thr2peak,   mid_trough   = get_peak_metrics(middle_idx)
-            last_width,  last_thr2peak,  last_trough  = get_peak_metrics(last_idx)
+        first_width, first_thr2peak, first_trough = get_peak_metrics(first_idx)
+        mid_width,   mid_thr2peak,   mid_trough   = get_peak_metrics(middle_idx)
+        last_width,  last_thr2peak,  last_trough  = get_peak_metrics(last_idx)
 
-            def safe_ratio(num, den):
-                return num / den if (den is not None and den != 0 and not np.isnan(den)) else np.nan
+        def safe_ratio(num, den):
+            return num / den if (den is not None and den != 0 and not np.isnan(den)) else np.nan
 
-            ratio_middle_first_width = safe_ratio(mid_width,first_width)
-            ratio_middle_first_threshold_to_peak = safe_ratio(mid_thr2peak,first_thr2peak)
-            ratio_middle_first_fast_trough = safe_ratio(mid_trough,first_trough)
+        ratio_middle_first_width = safe_ratio(mid_width,first_width)
+        ratio_middle_first_threshold_to_peak = safe_ratio(mid_thr2peak,first_thr2peak)
+        ratio_middle_first_fast_trough = safe_ratio(mid_trough,first_trough)
 
-            ratio_last_first_width = safe_ratio(last_width,first_width)
-            ratio_last_first_threshold_to_peak = safe_ratio(last_thr2peak,first_thr2peak)
-            ratio_last_first_fast_trough = safe_ratio(last_trough,first_trough)
+        ratio_last_first_width = safe_ratio(last_width,first_width)
+        ratio_last_first_threshold_to_peak = safe_ratio(last_thr2peak,first_thr2peak)
+        ratio_last_first_fast_trough = safe_ratio(last_trough,first_trough)
 
         # Get the mean isi
         if len(valid_peaks) >= 2: 
@@ -1389,19 +1375,19 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
             if analysis_windows is not None:
                 if use_relative_times:
                     # For mixed protocol: stimulus window in RELATIVE times (ms) for plotting
-                    t_stim_start = sweep_relative_t_start * 1000
-                    t_stim_end = sweep_relative_t_end * 1000
+                    plot_stim_start = sweep_relative_t_start * 1000
+                    plot_stim_end = sweep_relative_t_end * 1000
                 else:
                     # For single protocol: stimulus window in ABSOLUTE times
-                    t_stim_start = analysis_windows.get('t_stim_start')
-                    t_stim_end = analysis_windows.get('t_stim_end')
+                    plot_stim_start = analysis_windows.get('t_stim_start')
+                    plot_stim_end = analysis_windows.get('t_stim_end')
                 
-                if t_stim_start is not None and t_stim_end is not None:
+                if plot_stim_start is not None and plot_stim_end is not None:
                     # Add vertical lines at stimulus boundaries
-                    plt.axvline(x=t_stim_start, color='green', linestyle='--', linewidth=2, alpha=0.7, label='Stimulus start')
-                    plt.axvline(x=t_stim_end, color='orange', linestyle='--', linewidth=2, alpha=0.7, label='Stimulus end')
+                    plt.axvline(x=plot_stim_start, color='green', linestyle='--', linewidth=2, alpha=0.7, label='Stimulus start')
+                    plt.axvline(x=plot_stim_end, color='orange', linestyle='--', linewidth=2, alpha=0.7, label='Stimulus end')
                     # Optional: shade the stimulus region
-                    plt.axvspan(t_stim_start, t_stim_end, alpha=0.1, color='yellow', label='Stimulus window')
+                    plt.axvspan(plot_stim_start, plot_stim_end, alpha=0.1, color='yellow', label='Stimulus window')
             
             if peaks_plot:
                 # filtered_peaks stores (indices, times) tuple

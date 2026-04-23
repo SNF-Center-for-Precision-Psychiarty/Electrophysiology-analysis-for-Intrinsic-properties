@@ -1245,6 +1245,7 @@ def run_for_bundle(bundle_dir: str, reference_bundle_dir: str = None, skip_plots
     # sweep_config was already loaded at the beginning of this function
     print(f"  Calculating resting membrane potential...")
     df_vm_per_sweep = resting_vm_per_sweep(df_mv_kept, sweep_config, bundle_dir)  # one row per sweep, columns like resting_vm_mean_mV
+    # Grand average resting vm
     combined_mean = float(df_vm_per_sweep["resting_vm_mean_mV"].mean())
     print(f"  ✓ Mean resting Vm: {combined_mean:.2f} mV")
 
