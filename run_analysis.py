@@ -1077,6 +1077,7 @@ def prompt_and_generate_sweep_gifs(bundle_dir: str, no_checkpoints: bool = False
 
     if not is_interactive or no_checkpoints:
         print("\n[Auto] Skipping GIF generation (non-interactive mode).")
+        _archive_plot_folders(p, no_checkpoints=no_checkpoints)
         return
 
     print(f"\n{'='*70}")
@@ -1091,6 +1092,7 @@ def prompt_and_generate_sweep_gifs(bundle_dir: str, no_checkpoints: bool = False
     user_input = input().strip().lower()
     if user_input not in ('y', 'yes'):
         print("✓ Skipping GIF generation.")
+        _archive_plot_folders(p, no_checkpoints=no_checkpoints)
         return
 
     print(f"\nGenerating sweep GIFs...")
@@ -1217,7 +1219,14 @@ def prompt_and_generate_sweep_gifs(bundle_dir: str, no_checkpoints: bool = False
         else:
             print("✓ Skipping averaged peaks GIF.")
 
-    # --- Archive plot folders to save space ---
+    _archive_plot_folders(p, no_checkpoints=no_checkpoints)
+
+
+def _archive_plot_folders(bundle_path: Path, no_checkpoints: bool = False):
+    """Archive per-sweep plot folders into plots_archive.zip and delete originals.
+
+    Under --no-checkpoints, archives automatically without prompting.
+    """
     plot_folders = [
         "AP_Per_Sweep",
         "Averaged_Peaks_Per_Sweep",
@@ -1225,47 +1234,53 @@ def prompt_and_generate_sweep_gifs(bundle_dir: str, no_checkpoints: bool = False
         "Sav_Gol_Plots_Per_Sweep",
         "Kink_Diagnostics",
         "Input_Resistance",
-        # "Negative_Current_Smoothing",
-        # "filter_visualizations",
     ]
-    existing_folders = [p / name for name in plot_folders if (p / name).exists()]
+    existing_folders = [bundle_path / name for name in plot_folders if (bundle_path / name).exists()]
 
-    if existing_folders:
-        folder_names = [f.name for f in existing_folders]
-        total_files = sum(len(list(f.rglob("*"))) for f in existing_folders)
-        print(f"\n{'='*70}")
-        print("📦 OPTIONAL: ARCHIVE PLOT FOLDERS")
-        print("="*70)
-        print(f"\nFound {len(existing_folders)} plot folders ({total_files} files total):")
-        for name in folder_names:
-            print(f"  - {name}/")
-        print(f"\nThese are already included in the summary PDF.")
+    if not existing_folders:
+        return
+
+    folder_names = [f.name for f in existing_folders]
+    total_files = sum(len(list(f.rglob("*"))) for f in existing_folders)
+    print(f"\n{'='*70}")
+    print("📦 ARCHIVE PLOT FOLDERS")
+    print("="*70)
+    print(f"\nFound {len(existing_folders)} plot folders ({total_files} files total):")
+    for name in folder_names:
+        print(f"  - {name}/")
+    print(f"\nThese are already included in the summary PDF.")
+
+    if no_checkpoints or not sys.stdin.isatty():
+        print("[Auto] Archiving plots_archive.zip (no-checkpoints mode).")
+        do_archive = True
+    else:
         print("Would you like to zip them into plots_archive.zip and delete the originals?")
         print("Enter 'y' to archive, or press Enter to keep as-is: ")
-
         user_input = input().strip().lower()
-        if user_input in ('y', 'yes'):
-            import zipfile
-            import shutil
+        do_archive = user_input in ('y', 'yes')
 
-            zip_path = p / "plots_archive.zip"
-            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
-                for folder in existing_folders:
-                    for file in sorted(folder.rglob("*")):
-                        if file.is_file():
-                            arcname = str(file.relative_to(p))
-                            zf.write(file, arcname)
+    if not do_archive:
+        print("✓ Keeping plot folders as-is.")
+        return
 
-            # Verify zip was created successfully before deleting
-            if zip_path.exists() and zip_path.stat().st_size > 0:
-                for folder in existing_folders:
-                    shutil.rmtree(folder)
-                print(f"  ✓ Archived {len(existing_folders)} folders ({total_files} files) → {zip_path.name}")
-                print(f"    Archive size: {zip_path.stat().st_size / 1024:.1f} KB")
-            else:
-                print("  ⚠ Zip creation failed. Original folders kept.")
-        else:
-            print("✓ Keeping plot folders as-is.")
+    import zipfile
+    import shutil
+
+    zip_path = bundle_path / "plots_archive.zip"
+    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for folder in existing_folders:
+            for file in sorted(folder.rglob("*")):
+                if file.is_file():
+                    arcname = str(file.relative_to(bundle_path))
+                    zf.write(file, arcname)
+
+    if zip_path.exists() and zip_path.stat().st_size > 0:
+        for folder in existing_folders:
+            shutil.rmtree(folder)
+        print(f"  ✓ Archived {len(existing_folders)} folders ({total_files} files) → {zip_path.name}")
+        print(f"    Archive size: {zip_path.stat().st_size / 1024:.1f} KB")
+    else:
+        print("  ⚠ Zip creation failed. Original folders kept.")
 
 
 def load_sweep_config(bundle_dir: str):
@@ -1614,8 +1629,8 @@ def run_for_bundle(bundle_dir: str, reference_bundle_dir: str = None, no_checkpo
     df_analysis = pd.read_parquet(p /"analysis.parquet")
     fs = float(man["meta"]["sampleRate_Hz"])  # Convert from string to float
 
-    run_spike_detection(df_mv_kept, df_pa_kept, df_analysis, fs, bundle_dir, 
-                       pA_was_replaced=pA_was_replaced, sweep_config=sweep_config)
+    run_spike_detection(df_mv_kept, df_pa_kept, df_analysis, fs, bundle_dir,
+                       pA_was_replaced=pA_was_replaced, sweep_config=sweep_config, plot_preferences=plot_preferences)
     #After running above line, analysis.parquet and analysis.csv and manifest.json will be updated
     
     print(f"  ✓ Spike detection complete")
@@ -1643,7 +1658,7 @@ def run_for_bundle(bundle_dir: str, reference_bundle_dir: str = None, no_checkpo
     #low pass filter
     print(f"  🔄 Applying Savitzky-Golay low-pass filter...")
     df_analysis = pd.read_parquet(p /"analysis.parquet")
-    run_sav_gol(df_mv_kept, df_analysis, fs, bundle_dir, sweep_config=sweep_config)
+    run_sav_gol(df_mv_kept, df_analysis, fs, bundle_dir, sweep_config=sweep_config, plot_preferences=plot_preferences)
     
     print(f"  ✓ Savitzky-Golay filtering complete")
     
@@ -1696,7 +1711,7 @@ def run_for_bundle(bundle_dir: str, reference_bundle_dir: str = None, no_checkpo
     print(f"\n[Step 7] Sag current analysis (HCN channels)...")
     print(f"  📊 Computing sag current from negative-current sweeps...")
     
-    sag_results = calculate_sag_for_bundle(bundle_dir)
+    sag_results = calculate_sag_for_bundle(bundle_dir, plot_preferences=plot_preferences)
     
     if sag_results:
         # Add sag measurements to analysis.parquet

@@ -558,12 +558,16 @@ For each bundle, this will:
     print("\nAnalysis options:")
     print("  1) Run full analysis with plots (default)")
     print("  2) Only create sweep_config.json (skip spike detection)")
-    
-    while True:
-        analysis_choice = input("Enter 1 or 2: ").strip()
-        if analysis_choice in ["1", "2"]:
-            break
-        print("  ✗ Invalid input. Please enter 1 or 2.")
+
+    if no_checkpoints:
+        analysis_choice = "1"
+        print("  [no-checkpoints] Auto-selecting option 1 (full analysis)")
+    else:
+        while True:
+            analysis_choice = input("Enter 1 or 2: ").strip()
+            if analysis_choice in ["1", "2"]:
+                break
+            print("  ✗ Invalid input. Please enter 1 or 2.")
     
     # Ask about resuming from a specific bundle
     start_idx = 0

@@ -158,14 +158,6 @@ def calculate_sag(voltage_response: dict, v_rest: float) -> dict:
     else:
         sag_ratio = 0
 
-    # Clamp negative ratios to 0: a negative ratio means v_steady < v_peak, i.e. the
-    # cell never recovered (slow or no HCN). Reporting 0 is the truthful value;
-    # the negative number is an artifact of the v_peak window assumption being
-    # violated when membrane dynamics are slow.
-    if sag_ratio < 0:
-        sag_ratio = 0
-        sag_voltage = 0.0
-
     # Sag as percentage
     sag_percent = sag_ratio * 100
 

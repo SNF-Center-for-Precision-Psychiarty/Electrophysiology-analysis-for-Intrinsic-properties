@@ -74,7 +74,7 @@ def get_input_resistance(df, df_pA, bundle_path, sweep_config=None):
     # Load analysis results to identify which sweeps have no spikes
     # This is more reliable than re-detecting peaks
     df_analysis = pd.read_parquet(bundle_path / "analysis.parquet")
-    no_spike_sweeps = set(df_analysis[df_analysis['spike_frequency_Hz'] == 0]['sweep'].tolist())
+    no_spike_sweeps = set(df_analysis[(df_analysis['spike_frequency_Hz'] == 0) | (df_analysis['spike_frequency_Hz'].isna())]['sweep'].tolist())
     
     print(f"  Sweeps with NO spikes (from analysis): {len(no_spike_sweeps)} sweeps")
     print(f"  NOTE: Only using first 8 sweeps for input resistance calculation")
@@ -182,7 +182,7 @@ def get_input_resistance(df, df_pA, bundle_path, sweep_config=None):
         voltage_avg_vals = np.array(voltage_avg_vals)
         slope, intercept, r_value, p_value, std_err = linregress(current_avg_vals, voltage_avg_vals)
         rin_mohm = slope  # mV/pA = MΩ (input resistance)
-        print(f"Rin = {rin_mohm:.2f} MΩ (R² = {r_value**2:.3f})")
+        print(f"Rin = {rin_mohm:.2f} MOhm (R^2 = {r_value**2:.3f})")
 
         # Plot I-V curve with best fit 
         plot_dir = bundle_path / "Input_Resistance"
@@ -204,7 +204,7 @@ def get_input_resistance(df, df_pA, bundle_path, sweep_config=None):
         plt.savefig(plot_dir / 'InputResistance.jpeg')
         plt.close()
 
-        print("AVERAGED MΩ:",rin_mohm)
+        print("AVERAGED MOhm:",rin_mohm)
 
     # Update manifest
     # Path to your manifest file

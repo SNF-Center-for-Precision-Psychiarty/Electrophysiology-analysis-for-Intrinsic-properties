@@ -6,7 +6,7 @@ import warnings
 import matplotlib
 matplotlib.use('Agg')  # Non-interactive backend for speed
 import matplotlib.pyplot as plt
-from scipy.signal import find_peaks, savgol_filter
+from scipy.signal import find_peaks
 from pathlib import Path
 from kink_detection import (
     measure_kink_for_spike, 
@@ -31,91 +31,6 @@ from analysis_config import (
 
 def dbg(msg):
     print(f"[DEBUG] {msg}")
-
-def smooth_negative_current_stimulus(
-    time,
-    voltage,
-    t_stim_start,
-    t_stim_end,
-    stimulus_level_pA=None,
-    plot_dir=None,
-    sweep_number=None,
-):
-    """
-    Apply Savitzky-Goyal smoothing to stimulus period when negative current detected.
-    This removes artifactual spikes from cultured cell firing behavior during hyperpolarization.
-    
-    Args:
-        time: Time array (seconds) for response
-        voltage: Voltage/current array (mV or pA) - the response data to smooth
-        t_stim_start: Stimulus start time (seconds)
-        t_stim_end: Stimulus end time (seconds)
-        stimulus_level_pA: Injected current level from sweep_config (REQUIRED)
-    
-    Returns:
-        voltage_filtered: Response array with stimulus period smoothed if negative current detected
-    """
-    # Check if stimulus current is negative
-    if stimulus_level_pA is None or stimulus_level_pA >= -0.5:
-        # No smoothing needed for positive/zero stimulus
-        return voltage
-    
-    # Find stimulus window indices in response
-    stim_mask = (time >= t_stim_start) & (time <= t_stim_end)
-    stim_indices = np.where(stim_mask)[0]
-    
-    if len(stim_indices) == 0:
-        return voltage
-    
-    # Check if we have enough data points for smoothing
-    if len(stim_indices) < 5:
-        return voltage
-    
-    voltage_filtered = voltage.copy()
-    
-    print(f"    Detected negative stimulus current ({stimulus_level_pA:.2f} pA)")
-    
-    # Get the response region during stimulus
-    stim_response = voltage[stim_indices]
-    
-    # Use window length based on number of samples
-    window_length = min(len(stim_indices), 51)  # Use 51-point window if possible
-    if window_length % 2 == 0:
-        window_length -= 1  # Must be odd
-    if window_length < 5:
-        window_length = 5
-    
-    try:
-        stim_response_smooth = savgol_filter(stim_response, window_length, polyorder=3)
-        voltage_filtered[stim_indices] = stim_response_smooth
-        print(f"    ✓ Applied SavGol smoothing (window={window_length}, polyorder=3)")
-
-        # if plot_dir is not None:
-        #     plot_path = Path(plot_dir)
-        #     plot_path.mkdir(parents=True, exist_ok=True)
-
-        #     fig, ax = plt.subplots(figsize=(10, 4))
-        #     ax.plot(time, voltage, color="0.65", linewidth=1, label="Raw")
-        #     ax.plot(time, voltage_filtered, color="tab:blue", linewidth=1.5, label="Smoothed")
-        #     ax.axvspan(t_stim_start, t_stim_end, color="gold", alpha=0.15, label="Stimulus window")
-        #     ax.axvline(t_stim_start, color="green", linestyle="--", linewidth=1)
-        #     ax.axvline(t_stim_end, color="red", linestyle="--", linewidth=1)
-        #     ax.set_xlabel("Time (s)")
-        #     ax.set_ylabel("Voltage (mV)")
-        #     title = "Negative Current Smoothing"
-        #     if sweep_number is not None:
-        #         title += f" - Sweep {sweep_number}"
-        #     ax.set_title(title)
-        #     ax.legend(loc="best")
-        #     ax.grid(True, alpha=0.2)
-        #     plt.tight_layout()
-        #     filename = f"sweep_{sweep_number}_smoothing.jpeg" if sweep_number is not None else "smoothing.jpeg"
-        #     plt.savefig(plot_path / filename, dpi=200)
-        #     plt.close(fig)
-    except Exception as e:
-        raise ValueError(f"ERROR: Could not apply SavGol filter: {e}")
-    
-    return voltage_filtered
 
 def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced=False, analysis_windows=None, sweep_config=None, plot_preferences=None):
     # Default plot preferences if not specified
@@ -725,49 +640,49 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
             if segment is not None:
                 valid_spike_segments.append(segment)
 
-    # Store peak TIMES (in absolute seconds), not indices, for robust plotting
-    # This avoids index confusion between filtered and full sweep data
-    valid_peak_times = time[valid_peaks] if len(valid_peaks) > 0 else []
-    filtered_peaks[sweep_number] = (valid_peaks, valid_peak_times)
-    max_peaks_overall = max(max_peaks_overall, len(valid_peaks))
+        # Store peak TIMES (in absolute seconds), not indices, for robust plotting
+        # This avoids index confusion between filtered and full sweep data
+        valid_peak_times = time[valid_peaks] if len(valid_peaks) > 0 else []
+        filtered_peaks[sweep_number] = (valid_peaks, valid_peak_times)
+        max_peaks_overall = max(max_peaks_overall, len(valid_peaks))
 
-    # Morphology on how AP changes
-    ratio_middle_first_width = np.nan
-    ratio_middle_first_threshold_to_peak = np.nan
-    ratio_middle_first_fast_trough = np.nan
-    ratio_last_first_width = np.nan
-    ratio_last_first_threshold_to_peak = np.nan
-    ratio_last_first_fast_trough = np.nan
+        # Morphology on how AP changes
+        ratio_middle_first_width = np.nan
+        ratio_middle_first_threshold_to_peak = np.nan
+        ratio_middle_first_fast_trough = np.nan
+        ratio_last_first_width = np.nan
+        ratio_last_first_threshold_to_peak = np.nan
+        ratio_last_first_fast_trough = np.nan
 
-    if len(valid_peaks) >= 3:
-        def get_peak_metrics(idx: int):
-            return (
-                ap_widths[idx],
-                threshold_to_peak_voltages[idx],
-                fast_trough_voltages[idx],
-            )
-        
-        first_idx = 0
-        middle_idx = floor(len(valid_peaks)/2)
-        last_idx = -1
+        if len(valid_peaks) >= 3:
+            def get_peak_metrics(idx: int):
+                return (
+                    ap_widths[idx],
+                    threshold_to_peak_voltages[idx],
+                    fast_trough_voltages[idx],
+                )
+            
+            first_idx = 0
+            middle_idx = floor(len(valid_peaks)/2)
+            last_idx = -1
 
-        first_width, first_thr2peak, first_trough = get_peak_metrics(first_idx)
-        mid_width,   mid_thr2peak,   mid_trough   = get_peak_metrics(middle_idx)
-        last_width,  last_thr2peak,  last_trough  = get_peak_metrics(last_idx)
+            first_width, first_thr2peak, first_trough = get_peak_metrics(first_idx)
+            mid_width,   mid_thr2peak,   mid_trough   = get_peak_metrics(middle_idx)
+            last_width,  last_thr2peak,  last_trough  = get_peak_metrics(last_idx)
 
-        def safe_ratio(num, den):
-            return num / den if (den is not None and den != 0 and not np.isnan(den)) else np.nan
+            def safe_ratio(num, den):
+                return num / den if (den is not None and den != 0 and not np.isnan(den)) else np.nan
 
-        ratio_middle_first_width = safe_ratio(mid_width,first_width)
-        ratio_middle_first_threshold_to_peak = safe_ratio(mid_thr2peak,first_thr2peak)
-        ratio_middle_first_fast_trough = safe_ratio(mid_trough,first_trough)
+            ratio_middle_first_width = safe_ratio(mid_width,first_width)
+            ratio_middle_first_threshold_to_peak = safe_ratio(mid_thr2peak,first_thr2peak)
+            ratio_middle_first_fast_trough = safe_ratio(mid_trough,first_trough)
 
-        ratio_last_first_width = safe_ratio(last_width,first_width)
-        ratio_last_first_threshold_to_peak = safe_ratio(last_thr2peak,first_thr2peak)
-        ratio_last_first_fast_trough = safe_ratio(last_trough,first_trough)
+            ratio_last_first_width = safe_ratio(last_width,first_width)
+            ratio_last_first_threshold_to_peak = safe_ratio(last_thr2peak,first_thr2peak)
+            ratio_last_first_fast_trough = safe_ratio(last_trough,first_trough)
 
         # Get the mean isi
-        if len(valid_peaks) >= 2: 
+        if len(valid_peaks) >= 2:
             peak_times = time[valid_peaks] * 1000 # convert to ms 
             isi_ms = np.diff(peak_times) 
             mean_isi_ms = float(np.mean(isi_ms)) 
@@ -800,14 +715,14 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
             for b in range(n_bins):
                 peaks_in_bin = peak_times_full[bin_indices == b]
                 count = len(peaks_in_bin)
-                
+                    
                 if len(peaks_in_bin) >= 2:
                     isi = np.diff(peaks_in_bin)
                     mean_isi = float(np.mean(isi))
                     cv = float(np.std(isi) / mean_isi) if mean_isi > 0 else np.nan
                 else:
                     cv = np.nan
-                
+                    
                 bin_spike_count.append(count)
                 bin_cv_isi.append(cv)
 
@@ -816,7 +731,7 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
             bin_cv_isi = [np.nan] * n_bins
         spike_count_cols = {f"bin_{i}_spike_count": bin_spike_count[i] for i in range(n_bins)}
         cv_cols  = {f"bin_{i}_cv_isi": bin_cv_isi[i] for i in range(n_bins)}
-     
+        
         # ----------------------------------------------------
         # Construct averaged spike per sweep & plot with:
         #   - Window 1: -4.5 ms to 0 ms (pre-peak shaded)
@@ -1050,7 +965,7 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
             print(f"       • Successful segments: {segment_success_count}")
             print(f"       • Failed segments (boundary): {segment_fail_count}")
             print(f"       • Total peaks processed: {len(peaks)}")
-        
+            
         # ----------------- Aggregate per sweep -----------------
         if len(peak_voltages) > 0:
             peak_level_data[sweep_number] = {
@@ -1077,7 +992,7 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
                 "Kink Height": kink_heights,
                 "ISI_ms": ([np.nan] + isi_ms.tolist())
             }
-            
+                
             # Pre-calculate kink metrics to avoid empty array warnings
 
             kink_count_arr = np.array(kink_counts)
@@ -1107,7 +1022,7 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
                 if np.isfinite(kink_heights_arr).any()
                 else np.nan
             )
-            
+                
             sweep_results.append(
                 {
                     "sweep": sweep_number,
