@@ -19,19 +19,23 @@ from analysis_config import (
     BASELINE_WINDOW_S,
 )
 
-# Set to True to enable verbose/debug output in terminal
-VERBOSE = False
 
-def run_sav_gol(df, df_analysis, fs, bundle_path, sweep_config=None, skip_plots=False):
-    if VERBOSE:
-        print("RUNNING SAV GOL FILTER")
-        print("NOTE: Sav-Gol filter runs on baseline periods (no stimulus) in every sweep")
+def dbg(msg):
+    print(f"[DEBUG] {msg}")
+
+def run_sav_gol(df, df_analysis, fs, bundle_path, sweep_config=None, plot_preferences=None):
+    # Default plot preferences if not specified
+    if plot_preferences is None:
+        plot_preferences = {"kink_diagnostics": False, "sag_current": False, "savgol_plots": False}
     
+    print("RUNNING SAV GOL FILTER")
+    print("NOTE: Sav-Gol filter runs on baseline periods (no stimulus) in every sweep")
+
     # Detect protocol type (mixed vs single)
     bundle_path = Path(bundle_path)
     man = json.loads((bundle_path / "manifest.json").read_text())
     is_mixed = "stimulus" in man.get("tables", {}) and "response" in man.get("tables", {})
-    if VERBOSE: print(f"Protocol type: {'MIXED' if is_mixed else 'SINGLE'}")
+    print(f"Protocol type: {'MIXED' if is_mixed else 'SINGLE'}")
     
     # Handle sampling rate for mixed vs single protocol
     # For mixed protocol: fs might be a list like ['200000.0', '50000.0']
@@ -49,7 +53,7 @@ def run_sav_gol(df, df_analysis, fs, bundle_path, sweep_config=None, skip_plots=
                 for sweep_id, protocol_data in protocols.items():
                     sweep_rates[int(sweep_id)] = float(protocol_data.get("rate", max([float(f) for f in fs])))
                 if sweep_rates:
-                    if VERBOSE: print(f"  ✓ Loaded per-sweep sampling rates for {len(sweep_rates)} sweeps")
+                    print(f"  ✓ Loaded per-sweep sampling rates for {len(sweep_rates)} sweeps")
                 else:
                     print(f"  ⚠ No per-sweep rates in manifest protocols. Will compute from data.")
             except Exception as e:
@@ -122,91 +126,68 @@ def run_sav_gol(df, df_analysis, fs, bundle_path, sweep_config=None, skip_plots=
         print(f"ERROR: Failed to extract baseline windows from sweep_config: {e}")
         return
     
-    # STEP 2: Extract baseline data for all sweeps and calculate time range
-    # For MIXED protocol: convert relative times in sweep_config to absolute times in parquet
-    # For SINGLE protocol: use relative times directly
+    # STEP 2: Extract baseline data for all sweeps.
+    # baseline_start_s/baseline_end_s in sweep_config and t_s in the parquet share
+    # the same time convention for a given protocol type (relative for single,
+    # absolute for mixed), so a single filter works for both cases.
     df_baseline_all = []
     debug_first_sweep = True
-    for sweep_id, (baseline_start_rel, baseline_end_rel) in baseline_windows.items():
-        # Get this sweep's data
+    for sweep_id, (baseline_start, baseline_end) in baseline_windows.items():
         df_sweep_all = df[df["sweep"] == sweep_id]
-        
+
         if len(df_sweep_all) == 0:
             continue
-        
-        if is_mixed:
-            # For mixed protocol: sweep_config already contains ABSOLUTE times
-            # Parquet also has ABSOLUTE times - use them directly
-            baseline_start_abs = baseline_start_rel  # Actually absolute, misnamed
-            baseline_end_abs = baseline_end_rel      # Actually absolute, misnamed
-            
-            # Debug first sweep
-            if VERBOSE and debug_first_sweep:
-                print(f"\n[DEBUG] First sweep {sweep_id}:")
-                print(f"  Baseline window from sweep_config: [{baseline_start_abs:.6f}, {baseline_end_abs:.6f}] s")
-                print(f"  Parquet time range: [{df_sweep_all['t_s'].min():.6f}, {df_sweep_all['t_s'].max():.6f}] s")
-                print(f"  Total samples in sweep: {len(df_sweep_all)}")
-                debug_first_sweep = False
-            
-            df_sweep_baseline = df_sweep_all[(df_sweep_all["t_s"] >= baseline_start_abs) & 
-                                             (df_sweep_all["t_s"] < baseline_end_abs)]
-        else:
-            # For single protocol: use relative times directly
-            df_sweep_baseline = df_sweep_all[(df_sweep_all["t_s"] >= baseline_start_rel) & 
-                                             (df_sweep_all["t_s"] < baseline_end_rel)]
-        
-        if VERBOSE and debug_first_sweep is False and sweep_id == 4:
-            print(f"  Baseline samples extracted: {len(df_sweep_baseline)}")
-        
+
+        if debug_first_sweep:
+            dbg(f"First sweep {sweep_id}:")
+            dbg(f"  Baseline window from sweep_config: [{baseline_start:.6f}, {baseline_end:.6f}] s")
+            dbg(f"  Parquet time range: [{df_sweep_all['t_s'].min():.6f}, {df_sweep_all['t_s'].max():.6f}] s")
+            dbg(f"  Total samples in sweep: {len(df_sweep_all)}")
+            debug_first_sweep = False
+
+        df_sweep_baseline = df_sweep_all[(df_sweep_all["t_s"] >= baseline_start) &
+                                         (df_sweep_all["t_s"] < baseline_end)]
+
         df_baseline_all.append(df_sweep_baseline)
     
     df_baseline_combined = pd.concat(df_baseline_all, ignore_index=True)
-    
+
     if len(df_baseline_combined) == 0:
         print("ERROR: No data found in any baseline windows")
         return
-    
-    # Get the actual baseline time range (should be consistent across sweeps)
-    time_window_start = df_baseline_combined["t_s"].min()
-    time_window_end = df_baseline_combined["t_s"].max()
-    time_window_range_s = time_window_end - time_window_start
-    
-    if VERBOSE:
-        print(f"Processing baseline periods over time range [{time_window_start:.6f}, {time_window_end:.6f}] s")
-        print(f"Time window range: {time_window_range_s:.6f} s")
-    
-    # STEP 3: Calculate adaptive smoothing window duration (in time, not samples)
-    # This will be converted to samples per-sweep based on each sweep's sampling rate
-    desired_smooth_ms = smoothing_proportion * time_window_range_s * 1000
-    if VERBOSE: print(f"Adaptive smoothing window: {desired_smooth_ms:.2f} ms")
-    
+
+    # Per-sweep baseline durations (each sweep's smoothing window is computed
+    # from its own duration inside the loop below).
+    baseline_durations = [end - start for start, end in baseline_windows.values()]
+    print(f"Baseline durations across {len(baseline_durations)} sweeps: "
+          f"min={min(baseline_durations):.4f}s, "
+          f"median={float(np.median(baseline_durations)):.4f}s, "
+          f"max={max(baseline_durations):.4f}s")
+
     # === DEBUG: Key values to compare between machines ===
-    if VERBOSE:
-        print("\n" + "="*60)
-        print("DEBUG: COMPARE THESE VALUES BETWEEN MACHINES")
-        print("="*60)
-        print(f"  smoothing_proportion: {smoothing_proportion}")
-        print(f"  time_window_range_s: {time_window_range_s:.10f}")
-        print(f"  desired_smooth_ms: {desired_smooth_ms:.6f}")
-        print(f"  fs_default: {fs_default}")
-        print(f"  poly_order: {poly_order}")
-        print(f"  Valid sweeps in baseline_windows: {sorted(baseline_windows.keys())}")
-        print(f"  Total valid sweeps: {len(baseline_windows)}")
-        print(f"  sweep_rates: {sweep_rates}")
-        print("="*60 + "\n")
+    print("\n" + "="*60)
+    print("DEBUG: COMPARE THESE VALUES BETWEEN MACHINES")
+    print("="*60)
+    print(f"  smoothing_proportion: {smoothing_proportion}")
+    print(f"  fs_default: {fs_default}")
+    print(f"  poly_order: {poly_order}")
+    print(f"  Valid sweeps in baseline_windows: {sorted(baseline_windows.keys())}")
+    print(f"  Total valid sweeps: {len(baseline_windows)}")
+    print(f"  sweep_rates: {sweep_rates}")
+    print("="*60 + "\n")
 
     freq_before = []
     freq_after = []
     df_sav_gol = []
     
     # STEP 4: Process baseline period for each sweep
-    for sweep_id, (baseline_start_rel, baseline_end_rel) in baseline_windows.items():
-        if VERBOSE: print(f"\nSWEEP {sweep_id}:")
+    for sweep_id, (baseline_start, baseline_end) in baseline_windows.items():
+        print(f"\nSWEEP {sweep_id}:")
         
         # Get sweep-specific sampling rate
         if sweep_rates and sweep_id in sweep_rates:
             sweep_fs = sweep_rates[sweep_id]
-            if VERBOSE: print(f"  Using sweep-specific rate: {sweep_fs} Hz")
+            print(f"  Using sweep-specific rate: {sweep_fs} Hz")
         elif is_mixed:
             # For mixed protocol without per-sweep rates in manifest:
             # compute actual sampling rate from the data's time column
@@ -216,55 +197,52 @@ def run_sav_gol(df, df_analysis, fs, bundle_path, sweep_config=None, skip_plots=
                 median_dt = dt.median()
                 if median_dt > 0:
                     sweep_fs = round(1.0 / median_dt)
-                    if VERBOSE: print(f"  Computed sampling rate from data: {sweep_fs} Hz")
+                    print(f"  Computed sampling rate from data: {sweep_fs} Hz")
                 else:
                     sweep_fs = fs_default
-                    if VERBOSE: print(f"  Could not compute rate (dt=0), using default: {sweep_fs} Hz")
+                    print(f"  Could not compute rate (dt=0), using default: {sweep_fs} Hz")
             else:
                 sweep_fs = fs_default
-                if VERBOSE: print(f"  Too few samples to compute rate, using default: {sweep_fs} Hz")
+                print(f"  Too few samples to compute rate, using default: {sweep_fs} Hz")
             # Store computed rate so downsample_sweep can access it later
             sweep_rates[sweep_id] = sweep_fs
         else:
             # Single protocol: use the single sampling rate
             sweep_fs = fs_default
         
+        # Per-sweep smoothing window: a fixed proportion of THIS sweep's baseline
+        # duration. Avoids using the combined absolute time span across all sweeps,
+        # which is meaningless for mixed-protocol bundles.
+        sweep_baseline_duration_s = baseline_end - baseline_start
+        desired_smooth_ms = smoothing_proportion * sweep_baseline_duration_s * 1000
+
         # Calculate window length for this sweep based on its sampling rate
         window_length = int((desired_smooth_ms / 1000) * sweep_fs)
-        
+
         # Ensure window_length is odd (required for Savitzky-Golay)
         if window_length % 2 == 0:
             window_length += 1
-        
-        if VERBOSE: print(f"  Window length: {window_length} samples ({(window_length / sweep_fs) * 1000:.2f} ms)")
+
+        print(f"  Baseline duration: {sweep_baseline_duration_s:.4f} s, smoothing window: {desired_smooth_ms:.2f} ms")
+        print(f"  Window length: {window_length} samples ({(window_length / sweep_fs) * 1000:.2f} ms)")
         
         # Get this sweep's data
         df_sweep = df[df["sweep"] == sweep_id]
-        
-        # For MIXED protocol: sweep_config already has ABSOLUTE times
-        # For SINGLE protocol: use relative times directly
-        if is_mixed:
-            if len(df_sweep) == 0:
-                print(f"  No data for sweep {sweep_id}")
-                continue
-            # For mixed protocol: times in sweep_config are already absolute
-            baseline_start_abs = baseline_start_rel  # Actually absolute, misnamed variable
-            baseline_end_abs = baseline_end_rel      # Actually absolute, misnamed variable
-            group = df_sweep[(df_sweep["t_s"] >= baseline_start_abs) & (df_sweep["t_s"] < baseline_end_abs)]
-        else:
-            baseline_start_abs = baseline_start_rel
-            baseline_end_abs = baseline_end_rel
-            group = df_sweep[(df_sweep["t_s"] >= baseline_start_rel) & (df_sweep["t_s"] < baseline_end_rel)]
-        
+        if len(df_sweep) == 0:
+            print(f"  No data for sweep {sweep_id}")
+            continue
+
+        group = df_sweep[(df_sweep["t_s"] >= baseline_start) & (df_sweep["t_s"] < baseline_end)]
+
         if len(group) == 0:
             print(f"  No baseline data for sweep {sweep_id}")
             continue
-        
-        if VERBOSE: print(f"  Baseline period: [{baseline_start_abs:.6f}, {baseline_end_abs:.6f}] s ({len(group)} samples)")
+
+        print(f"  Baseline period: [{baseline_start:.6f}, {baseline_end:.6f}] s ({len(group)} samples)")
         time_absolute = group["t_s"].values  # Keep absolute times for output
         time = time_absolute.copy()  # For plotting (may be converted to relative)
         voltage = group["value"].values
-        baseline_duration = baseline_end_abs - baseline_start_abs
+        baseline_duration = baseline_end - baseline_start
         
         # For MIXED protocol: convert to relative times for plotting only
         # This makes the plot align with sweep_config markers which are in relative time
@@ -280,7 +258,7 @@ def run_sav_gol(df, df_analysis, fs, bundle_path, sweep_config=None, skip_plots=
             if actual_window_length % 2 == 0:
                 actual_window_length -= 1  # Make it odd
             actual_window_length = max(5, actual_window_length)  # Minimum 5 samples
-            if VERBOSE: print(f"  Window too large ({window_length} > {len(voltage)}), using {actual_window_length}")
+            print(f"  Window too large ({window_length} > {len(voltage)}), using {actual_window_length}")
         
         peaks, props = find_peaks(voltage, height=PEAK_HEIGHT_THRESHOLD, prominence=PEAK_PROMINENCE)
         # Enforce minimum peak distance to remove duplicate noise detections
@@ -290,7 +268,7 @@ def run_sav_gol(df, df_analysis, fs, bundle_path, sweep_config=None, skip_plots=
             if not filtered_peaks_list or (t_peak - time[int(filtered_peaks_list[-1])]) >= MIN_PEAK_DISTANCE_S:
                 filtered_peaks_list.append(peak_idx)
         peaks = np.array(filtered_peaks_list)
-        if VERBOSE: print(f"  Before filter: {len(peaks)} peaks")
+        print(f"  Before filter: {len(peaks)} peaks")
         #get frequency here
         freq_before.append(len(peaks) / baseline_duration)
         #run filter here
@@ -305,10 +283,10 @@ def run_sav_gol(df, df_analysis, fs, bundle_path, sweep_config=None, skip_plots=
         peaks2 = np.array(filtered_peaks2)
         #get frequency again here
         freq_after.append(len(peaks2) / baseline_duration)
-        if VERBOSE: print(f"  After filter: {len(peaks2)} peaks")
+        print(f"  After filter: {len(peaks2)} peaks")
 
-        # Plot the sweep before/after filter
-        if not skip_plots:
+        # Plot the sweep before/after filter [SavGol plots OPTIONAL]
+        if plot_preferences.get("savgol_plots", True):
             plot_dir = bundle_path / "Sav_Gol_Plots_Per_Sweep"
             plot_dir.mkdir(parents=True, exist_ok=True)
             plt.figure(figsize=(12, 4))  # Wider figure for better visibility
@@ -342,7 +320,7 @@ def run_sav_gol(df, df_analysis, fs, bundle_path, sweep_config=None, skip_plots=
     # Ensure sweep column is integer (concatenation may convert to float)
     df_sav_gol["sweep"] = df_sav_gol["sweep"].astype(int)
     
-    if VERBOSE: print("Post-Filtered Values:",df_sav_gol)
+    print("Post-Filtered Values:",df_sav_gol)
     
     # Validate that we have data after filtering
     if len(df_sav_gol) == 0:
@@ -412,7 +390,7 @@ def run_sav_gol(df, df_analysis, fs, bundle_path, sweep_config=None, skip_plots=
         .reset_index(drop=True)
     )
     
-    if VERBOSE: print(f"Downsampled to {len(long_df)} total 50ms windows across {long_df['sweep'].nunique()} sweeps")
+    print(f"Downsampled to {len(long_df)} total 50ms windows across {long_df['sweep'].nunique()} sweeps")
 
     # Metric 1: Get spread of RMPs from all windows across all sweeps
     Vm_all = long_df["value_50ms_mean"].to_numpy()
@@ -425,30 +403,26 @@ def run_sav_gol(df, df_analysis, fs, bundle_path, sweep_config=None, skip_plots=
         print("ERROR: No valid voltage data to analyze (all NaN or empty)")
         raise ValueError("No valid voltage data in downsampled dataframe")
     
-    if not skip_plots:
-        plt.figure(figsize=(8,6))
-        vmin, vmax = Vm_all.min(), Vm_all.max()
-        bin_step = 0.25 # fixed 0.25mV bins
-        
-        if VERBOSE: print(f"RMP range: [{vmin:.4f}, {vmax:.4f}] mV")
-        
-        # Ensure vmax > vmin to avoid numpy.arange error
-        if vmax <= vmin:
-            vmax = vmin + bin_step
-        
-        # Create histogram with safe binning using fixed number of bins
-        n_bins = max(10, int(np.ceil((vmax - vmin) / bin_step)))
-        plt.hist(Vm_all, bins=n_bins, color="skyblue", edgecolor='k')
-        plt.xlabel("Resting Membrane Potential (mV)")
-        plt.ylabel("Frequency")
-        plt.title(f"Resting Membrane Potential Distribution ({window_ms} ms bins across sweeps)")
-        plt.tight_layout()
-        #plt.show()
-        plt.savefig(bundle_path /'RMP_Dist_Post_Filter.jpeg', dpi=150)
-        plt.close()
-    else:
-        vmin, vmax = Vm_all.min(), Vm_all.max()
-        if VERBOSE: print(f"RMP range: [{vmin:.4f}, {vmax:.4f}] mV")
+    plt.figure(figsize=(8,6))
+    vmin, vmax = Vm_all.min(), Vm_all.max()
+    bin_step = 0.25 # fixed 0.25mV bins
+    
+    print(f"RMP range: [{vmin:.4f}, {vmax:.4f}] mV")
+    
+    # Ensure vmax > vmin to avoid numpy.arange error
+    if vmax <= vmin:
+        vmax = vmin + bin_step
+    
+    # Create histogram with safe binning using fixed number of bins
+    n_bins = max(10, int(np.ceil((vmax - vmin) / bin_step)))
+    plt.hist(Vm_all, bins=n_bins, color="skyblue", edgecolor='k')
+    plt.xlabel("Resting Membrane Potential (mV)")
+    plt.ylabel("Frequency")
+    plt.title(f"Resting Membrane Potential Distribution ({window_ms} ms bins across sweeps)")
+    plt.tight_layout()
+    #plt.show()
+    plt.savefig(bundle_path /'RMP_Dist_Post_Filter.jpeg', dpi=150)
+    plt.close()
 
 
     # Metric 2: drift range
@@ -514,23 +488,22 @@ def run_sav_gol(df, df_analysis, fs, bundle_path, sweep_config=None, skip_plots=
     )
     
     # Report on derivative calculation results
-    if VERBOSE:
-        print("\n--- Derivative Calculation Summary ---")
-        total_sweeps = len(baseline_windows)
-        calculated_sweeps = dvdt_means["filtered_RMP_derivative"].notna().sum()
-        nan_sweeps = dvdt_means["filtered_RMP_derivative"].isna().sum()
-        
-        print(f"Total sweeps with baseline windows: {total_sweeps}")
-        print(f"Sweeps with valid derivative: {calculated_sweeps}")
-        print(f"Sweeps with NaN derivative: {nan_sweeps}")
-        
-        if nan_sweeps > 0:
-            nan_sweep_ids = dvdt_means[dvdt_means["filtered_RMP_derivative"].isna()]["sweep"].tolist()
-            print(f"Sweeps with NaN: {nan_sweep_ids}")
-            print("Common reasons:")
-            print(f"  - Baseline duration < {window_ms}ms (need ≥2 windows for derivative)")
-            print("  - Insufficient samples at sweep's sampling rate")
-        print("---------------------------------------\n")
+    print("\n--- Derivative Calculation Summary ---")
+    total_sweeps = len(baseline_windows)
+    calculated_sweeps = dvdt_means["filtered_RMP_derivative"].notna().sum()
+    nan_sweeps = dvdt_means["filtered_RMP_derivative"].isna().sum()
+    
+    print(f"Total sweeps with baseline windows: {total_sweeps}")
+    print(f"Sweeps with valid derivative: {calculated_sweeps}")
+    print(f"Sweeps with NaN derivative: {nan_sweeps}")
+    
+    if nan_sweeps > 0:
+        nan_sweep_ids = dvdt_means[dvdt_means["filtered_RMP_derivative"].isna()]["sweep"].tolist()
+        print(f"Sweeps with NaN: {nan_sweep_ids}")
+        print("Common reasons:")
+        print(f"  - Baseline duration < {window_ms}ms (need ≥2 windows for derivative)")
+        print("  - Insufficient samples at sweep's sampling rate")
+    print("---------------------------------------\n")
 
 
     #_________________________________________________________________________
@@ -560,6 +533,11 @@ def run_sav_gol(df, df_analysis, fs, bundle_path, sweep_config=None, skip_plots=
     df_vm_per_sweep["d_std"] = d_std
     df_vm_per_sweep["normalized_signal_variability"] = mean_metric
     df_vm_per_sweep = df_vm_per_sweep.merge(dvdt_means, on="sweep", how="left")
+    # Drop any existing columns (and their _x/_y/_x_x/... suffixed variants from prior re-runs)
+    # so the merge overwrites cleanly instead of stacking new copies.
+    new_cols = [c for c in df_vm_per_sweep.columns if c != "sweep"]
+    df_analysis = df_analysis.drop(columns=[c for c in df_analysis.columns
+                                            if any(c == n or c.startswith(n + "_") for n in new_cols)])
     updated_analysis = df_analysis.merge(df_vm_per_sweep, on="sweep", how="left")
     
     # Sort by avg_injected_current_pA (ascending) before saving

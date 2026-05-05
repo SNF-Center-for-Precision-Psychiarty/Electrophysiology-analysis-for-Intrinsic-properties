@@ -2,7 +2,6 @@
 Central configuration for analysis parameters.
 These are shared across spike_detection_new.py, sav_gol_filter.py, input_resistance.py, etc.
 """
-VERBOSE = False
 # ============================================================================
 # Spike Detection Window Parameters
 # ============================================================================
@@ -88,6 +87,11 @@ BASELINE_FALLBACK_S = 0.01        # Last resort: use first 10ms if baseline dete
 # True artifacts: 20+ billion mV/s²
 SECOND_DERIV_THRESHOLD = 10e9     # 10 billion mV/s²
 
+# Voltage cutoff for artifact detection: d²V/dt² peaks at voltages above this are
+# treated as AP-peak rounding (Na+ inactivation collapsing dV/dt), not artifacts.
+# Real recording artifacts manifest at baseline / sub-threshold (RMP ~-70, threshold ~-50).
+ARTIFACT_DETECTION_VOLTAGE_CUTOFF_MV = 0.0
+
 # Voltage jump threshold for detecting discontinuities
 VOLTAGE_JUMP_THRESHOLD = 10.0     # mV - sudden voltage jump in single sample
 
@@ -126,8 +130,7 @@ def get_analysis_window_bounds(sweep_config=None):
             # The analysis window is the stimulus period (when stimulus is applied)
             t_min = windows["stimulus_start_s"]
             t_max = windows["stimulus_end_s"]
-            if VERBOSE:
-                print(f"Using analysis window from sweep_config: [{t_min:.6f}, {t_max:.6f}] s")
+            print(f"Using analysis window from sweep_config: [{t_min:.6f}, {t_max:.6f}] s")
         else:
             # No valid sweep found in config
             raise ValueError("No valid sweep found in sweep_config")

@@ -124,8 +124,7 @@ def filter_sweep_data(df_sweep: pd.DataFrame,
 def apply_lowpass_filter_to_bundle(bundle_dir: str, 
                                    cutoff_hz: float,
                                    sweeps_to_filter=None,
-                                   inplace: bool = True,
-                                   verbose: bool = False) -> dict:
+                                   inplace: bool = True) -> dict:
     """
     Apply low-pass filter to voltage and current data in a bundle.
     
@@ -139,7 +138,6 @@ def apply_lowpass_filter_to_bundle(bundle_dir: str,
         sweeps_to_filter: Optional iterable of sweep IDs to filter. If None,
             all sweeps are filtered.
         inplace: If True, overwrites parquet files. If False, returns filtered data only.
-        verbose: Print progress information
         
     Returns:
         Dictionary with:
@@ -184,26 +182,24 @@ def apply_lowpass_filter_to_bundle(bundle_dir: str,
             if rate_str:
                 sweep_to_rate[int(protocol_id)] = float(rate_str)
         
-        if verbose:
-            print(f"  Note: Multiple sampling rates detected")
-            print(f"  Unique rates: {sorted(set(sweep_to_rate.values()))}")
-            print(f"  Will use per-sweep rates from protocols")
+        print(f"  Note: Multiple sampling rates detected")
+        print(f"  Unique rates: {sorted(set(sweep_to_rate.values()))}")
+        print(f"  Will use per-sweep rates from protocols")
     else:
         # Single rate - use for all sweeps
         fs_mv = float(sample_rate_hz)
         fs_pa = float(sample_rate_hz)
         sweep_to_rate = None
     
-    if verbose:
-        print(f"\n{'='*70}")
-        print(f"LOW-PASS FILTER PRE-PROCESSING")
-        print(f"{'='*70}")
-        print(f"Cutoff frequency: {cutoff_hz} Hz ({cutoff_hz/1000:.1f} kHz)")
-        if sweep_to_rate is None:
-            print(f"Sampling rate: {fs_mv} Hz")
-        else:
-            unique_rates = sorted(set(sweep_to_rate.values()))
-            print(f"Sampling rates: {unique_rates} Hz (per-sweep)")
+    print(f"\n{'='*70}")
+    print(f"LOW-PASS FILTER PRE-PROCESSING")
+    print(f"{'='*70}")
+    print(f"Cutoff frequency: {cutoff_hz} Hz ({cutoff_hz/1000:.1f} kHz)")
+    if sweep_to_rate is None:
+        print(f"Sampling rate: {fs_mv} Hz")
+    else:
+        unique_rates = sorted(set(sweep_to_rate.values()))
+        print(f"Sampling rates: {unique_rates} Hz (per-sweep)")
 
     sweeps_filter_set = None
     if sweeps_to_filter is not None:
@@ -211,8 +207,7 @@ def apply_lowpass_filter_to_bundle(bundle_dir: str,
     
     # Load voltage data
     mv_path = p / man["tables"]["mv"]
-    if verbose:
-        print(f"\nLoading voltage data from {mv_path.name}...")
+    print(f"\nLoading voltage data from {mv_path.name}...")
     df_mv = pd.read_parquet(mv_path)
     n_sweeps_mv_total = df_mv['sweep'].nunique()
     
@@ -220,10 +215,9 @@ def apply_lowpass_filter_to_bundle(bundle_dir: str,
     mv_raw_path = p / man["tables"]["mv"].replace('.parquet', '_raw.parquet')
     df_mv.to_parquet(mv_raw_path, index=False)
     
-    if verbose:
-        print(f"  Loaded: {len(df_mv):,} samples, {n_sweeps_mv_total} sweeps")
-        print(f"  Saved backup of raw data to {mv_raw_path.name}")
-        print(f"  Filtering each sweep individually...")
+    print(f"  Loaded: {len(df_mv):,} samples, {n_sweeps_mv_total} sweeps")
+    print(f"  Saved backup of raw data to {mv_raw_path.name}")
+    print(f"  Filtering each sweep individually...")
     
     # Apply filter to each sweep separately
     df_mv_filtered = df_mv.copy()
@@ -260,16 +254,14 @@ def apply_lowpass_filter_to_bundle(bundle_dir: str,
 
         n_sweeps_mv_filtered += 1
 
-        if verbose and n_sweeps_mv_filtered % max(1, n_sweeps_mv_total // 10) == 0:
+        if n_sweeps_mv_filtered % max(1, n_sweeps_mv_total // 10) == 0:
             print(f"    Progress: Sweep {sweep_id}/{n_sweeps_mv_total} (fs={fs_sweep} Hz)...")
     
-    if verbose:
-        print(f"  ✓ Voltage filtering complete")
+    print(f"  ✓ Voltage filtering complete")
     
     # Load current data
     pa_path = p / man["tables"]["pa"]
-    if verbose:
-        print(f"\nLoading current data from {pa_path.name}...")
+    print(f"\nLoading current data from {pa_path.name}...")
     df_pa = pd.read_parquet(pa_path)
     n_sweeps_pa_total = df_pa['sweep'].nunique()
     
@@ -277,10 +269,9 @@ def apply_lowpass_filter_to_bundle(bundle_dir: str,
     pa_raw_path = p / man["tables"]["pa"].replace('.parquet', '_raw.parquet')
     df_pa.to_parquet(pa_raw_path, index=False)
     
-    if verbose:
-        print(f"  Loaded: {len(df_pa):,} samples, {n_sweeps_pa_total} sweeps")
-        print(f"  Saved backup of raw data to {pa_raw_path.name}")
-        print(f"  Filtering each sweep individually...")
+    print(f"  Loaded: {len(df_pa):,} samples, {n_sweeps_pa_total} sweeps")
+    print(f"  Saved backup of raw data to {pa_raw_path.name}")
+    print(f"  Filtering each sweep individually...")
     
     # Apply filter to each sweep separately
     df_pa_filtered = df_pa.copy()
@@ -315,26 +306,22 @@ def apply_lowpass_filter_to_bundle(bundle_dir: str,
             index=df_sweep.index
         )
         n_sweeps_pa_filtered += 1
-        if verbose and n_sweeps_pa_filtered % max(1, n_sweeps_pa_total // 10) == 0:
+        if n_sweeps_pa_filtered % max(1, n_sweeps_pa_total // 10) == 0:
             print(f"    Progress: Sweep {sweep_id}/{n_sweeps_pa_total} (fs={fs_sweep} Hz)...")
     
-    if verbose:
-        print(f"  ✓ Current filtering complete")
+    print(f"  ✓ Current filtering complete")
     
     # Save filtered data back to parquet if inplace=True
     if inplace:
-        if verbose:
-            print(f"\nSaving filtered data...")
+        print(f"\nSaving filtered data...")
         df_mv_filtered.to_parquet(mv_path, index=False)
         df_pa_filtered.to_parquet(pa_path, index=False)
-        if verbose:
-            print(f"  ✓ Filtered voltage saved to {mv_path.name}")
-            print(f"  ✓ Filtered current saved to {pa_path.name}")
+        print(f"  ✓ Filtered voltage saved to {mv_path.name}")
+        print(f"  ✓ Filtered current saved to {pa_path.name}")
     
-    if verbose:
-        print(f"\n{'='*70}")
-        print(f"✓ LOW-PASS FILTER COMPLETE")
-        print(f"{'='*70}\n")
+    print(f"\n{'='*70}")
+    print(f"✓ LOW-PASS FILTER COMPLETE")
+    print(f"{'='*70}\n")
     
     return {
         'df_mv': df_mv_filtered,
@@ -361,6 +348,6 @@ def apply_lowpass_filter_to_bundle(bundle_dir: str,
 #     bundle_dir = sys.argv[1]
 #     cutoff_hz = float(sys.argv[2]) if len(sys.argv) > 2 else 5000
     
-#     # Apply filter with verbose output
-#     result = apply_lowpass_filter_to_bundle(bundle_dir, cutoff_hz, inplace=True, verbose=True)
+#     # Apply filter
+#     result = apply_lowpass_filter_to_bundle(bundle_dir, cutoff_hz, inplace=True)
 #     print(f"Result: Filtered {result['n_sweeps_mv']} voltage sweeps and {result['n_sweeps_pa']} current sweeps")

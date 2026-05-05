@@ -29,11 +29,8 @@ from analysis_config import (
     MIN_PEAK_THRESHOLD_AMPLITUDE_MV,
 )
 
-# Set to True to enable verbose/debug output in terminal
-VERBOSE = False
-
 def dbg(msg):
-    if VERBOSE: print(f"[DEBUG] {msg}")
+    print(f"[DEBUG] {msg}")
 
 def smooth_negative_current_stimulus(
     time,
@@ -76,8 +73,7 @@ def smooth_negative_current_stimulus(
     
     voltage_filtered = voltage.copy()
     
-    if VERBOSE:
-        print(f"    Detected negative stimulus current ({stimulus_level_pA:.2f} pA)")
+    print(f"    Detected negative stimulus current ({stimulus_level_pA:.2f} pA)")
     
     # Get the response region during stimulus
     stim_response = voltage[stim_indices]
@@ -92,38 +88,41 @@ def smooth_negative_current_stimulus(
     try:
         stim_response_smooth = savgol_filter(stim_response, window_length, polyorder=3)
         voltage_filtered[stim_indices] = stim_response_smooth
-        if VERBOSE:
-            print(f"    ✓ Applied SavGol smoothing (window={window_length}, polyorder=3)")
+        print(f"    ✓ Applied SavGol smoothing (window={window_length}, polyorder=3)")
 
-        if plot_dir is not None:
-            plot_path = Path(plot_dir)
-            plot_path.mkdir(parents=True, exist_ok=True)
+        # if plot_dir is not None:
+        #     plot_path = Path(plot_dir)
+        #     plot_path.mkdir(parents=True, exist_ok=True)
 
-            fig, ax = plt.subplots(figsize=(10, 4))
-            ax.plot(time, voltage, color="0.65", linewidth=1, label="Raw")
-            ax.plot(time, voltage_filtered, color="tab:blue", linewidth=1.5, label="Smoothed")
-            ax.axvspan(t_stim_start, t_stim_end, color="gold", alpha=0.15, label="Stimulus window")
-            ax.axvline(t_stim_start, color="green", linestyle="--", linewidth=1)
-            ax.axvline(t_stim_end, color="red", linestyle="--", linewidth=1)
-            ax.set_xlabel("Time (s)")
-            ax.set_ylabel("Voltage (mV)")
-            title = "Negative Current Smoothing"
-            if sweep_number is not None:
-                title += f" - Sweep {sweep_number}"
-            ax.set_title(title)
-            ax.legend(loc="best")
-            ax.grid(True, alpha=0.2)
-            plt.tight_layout()
-            filename = f"sweep_{sweep_number}_smoothing.jpeg" if sweep_number is not None else "smoothing.jpeg"
-            plt.savefig(plot_path / filename, dpi=200)
-            plt.close(fig)
+        #     fig, ax = plt.subplots(figsize=(10, 4))
+        #     ax.plot(time, voltage, color="0.65", linewidth=1, label="Raw")
+        #     ax.plot(time, voltage_filtered, color="tab:blue", linewidth=1.5, label="Smoothed")
+        #     ax.axvspan(t_stim_start, t_stim_end, color="gold", alpha=0.15, label="Stimulus window")
+        #     ax.axvline(t_stim_start, color="green", linestyle="--", linewidth=1)
+        #     ax.axvline(t_stim_end, color="red", linestyle="--", linewidth=1)
+        #     ax.set_xlabel("Time (s)")
+        #     ax.set_ylabel("Voltage (mV)")
+        #     title = "Negative Current Smoothing"
+        #     if sweep_number is not None:
+        #         title += f" - Sweep {sweep_number}"
+        #     ax.set_title(title)
+        #     ax.legend(loc="best")
+        #     ax.grid(True, alpha=0.2)
+        #     plt.tight_layout()
+        #     filename = f"sweep_{sweep_number}_smoothing.jpeg" if sweep_number is not None else "smoothing.jpeg"
+        #     plt.savefig(plot_path / filename, dpi=200)
+        #     plt.close(fig)
     except Exception as e:
         raise ValueError(f"ERROR: Could not apply SavGol filter: {e}")
     
     return voltage_filtered
 
-def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced=False, analysis_windows=None, sweep_config=None, skip_plots=False):
-    # Use global config values so the same thresholds are used everywhere
+def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced=False, analysis_windows=None, sweep_config=None, plot_preferences=None):
+    # Default plot preferences if not specified
+    if plot_preferences is None:
+        plot_preferences = {"kink_diagnostics": True, "sag_current": True, "savgol_plots": True}
+    
+    # Use parameters from centralized config
     pre_threshold_window_ms = PRE_THRESHOLD_WINDOW_MS
     post_threshold_window_ms = POST_THRESHOLD_WINDOW_MS
     threshold_percent = THRESHOLD_PERCENT
@@ -164,12 +163,11 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
                     't_stim_start': relative_t_stim_start,
                     't_stim_end': relative_t_stim_end
                 }
-                if VERBOSE:
-                    print(f"Using analysis windows from sweep_config.json:")
-                    print(f"  Protocol type: {'MIXED' if is_mixed else 'SINGLE'}")
-                    print(f"  Reference stimulus period: [{relative_t_stim_start:.6f}, {relative_t_stim_end:.6f}] s")
-                    if is_mixed:
-                        print(f"  Note: For mixed protocol, each sweep uses its own timing from sweep_config")
+                print(f"Using analysis windows from sweep_config.json:")
+                print(f"  Protocol type: {'MIXED' if is_mixed else 'SINGLE'}")
+                print(f"  Reference stimulus period: [{relative_t_stim_start:.6f}, {relative_t_stim_end:.6f}] s")
+                if is_mixed:
+                    print(f"  Note: For mixed protocol, each sweep uses its own timing from sweep_config")
         except (KeyError, TypeError) as e:
             print(f"WARNING: Failed to extract windows from sweep_config: {e}")
             print("  Falling back to hardcoded defaults")
@@ -182,9 +180,8 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
     
     t_stim_start = analysis_windows['t_stim_start']
     t_stim_end = analysis_windows['t_stim_end']
-    if VERBOSE:
-        print(f"Using stimulus windows:")
-        print(f"  Stimulus period: [{t_stim_start:.6f}, {t_stim_end:.6f}] s")
+    print(f"Using stimulus windows:")
+    print(f"  Stimulus period: [{t_stim_start:.6f}, {t_stim_end:.6f}] s")
 
     # Handle sampling rate (mixed protocol can have per‑sweep sample rates)
     # For mixed protocol: fs might be a list like ['200000.0', '50000.0']
@@ -216,15 +213,16 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
     total_struggling_kink_skips = 0
 
     # Remove stale kink diagnostics so plots reflect only this run
-    kink_plot_dir = Path(bundle_path) / "Kink_Diagnostics"
-    if kink_plot_dir.exists():
-        for old_plot in kink_plot_dir.glob("kink_spike_sweep*.jpeg"):
-            try:
-                old_plot.unlink()
-            except OSError:
-                pass
+    if plot_preferences.get("kink_diagnostics", True):
+        kink_plot_dir = Path(bundle_path) / "Kink_Diagnostics"
+        if kink_plot_dir.exists():
+            for old_plot in kink_plot_dir.glob("kink_spike_sweep*.jpeg"):
+                try:
+                    old_plot.unlink()
+                except OSError:
+                    pass
 
-    if VERBOSE: print("RUNNING SPIKE DETECTION")
+    print("RUNNING SPIKE DETECTION")
     
     # Get list of all sweeps present in the data
     unique_sweeps = sorted(df["sweep"].unique())
@@ -245,12 +243,12 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
         # FOR DEBUGGING, IGNORE
         # if sweep_number != 10:
         #      continue
-        if VERBOSE: print("SWEEP NUMBER:", sweep_number)
+        print("SWEEP NUMBER:", sweep_number)
         
     # Get sampling rate for this sweep (may vary in mixed protocol)
         if is_mixed and sweep_number in per_sweep_rates:
             sweep_fs = per_sweep_rates[sweep_number]
-            if VERBOSE: print(f"  Using sweep-specific rate: {sweep_fs} Hz")
+            print(f"  Using sweep-specific rate: {sweep_fs} Hz")
             # Recalculate samples for this sweep's rate
             sweep_pre_samples = int(pre_s * sweep_fs)
             sweep_post_samples = int(post_s * sweep_fs)
@@ -308,8 +306,11 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
             sweep_t_start = t_stim_start - pre_s
             sweep_t_end = t_stim_end + post_s
         
-    # Keep only the stimulus window for spike detection (absolute times)
-        group_window = group[(group["t_s"] >= sweep_t_min) & (group["t_s"] <= sweep_t_max)].reset_index(drop=True)
+        # Filter this sweep's data to the analysis window.
+        # Use the buffered window (sweep_t_start/end include pre_s/post_s padding) so
+        # spikes near the stimulus boundary still have room for trough/upstroke detection.
+        # Peaks themselves are restricted to [sweep_t_min, sweep_t_max] further below.
+        group_window = group[(group["t_s"] >= sweep_t_start) & (group["t_s"] <= sweep_t_end)].reset_index(drop=True)
         
         # Skip this sweep if the stimulus window is empty
         if len(group_window) == 0:
@@ -325,25 +326,15 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
         if sweep_config is not None:
             try:
                 stimulus_level_pA = sweep_config["sweeps"][str(sweep_number)].get("stimulus_level_pA", None)
-                if VERBOSE and stimulus_level_pA is not None:
+                if stimulus_level_pA is not None:
                     print(f"    Stimulus level: {stimulus_level_pA:.2f} pA")
             except (KeyError, TypeError):
                 stimulus_level_pA = None
         
-        # Optionally smooth negative‑current stimulus to reduce artifacts
-        smoothing_plot_dir = None
-        if not skip_plots:
-            smoothing_plot_dir = Path(bundle_path) / "Negative_Current_Smoothing"
-
-        voltage = smooth_negative_current_stimulus(
-            time,
-            voltage,
-            sweep_t_min,
-            sweep_t_max,
-            stimulus_level_pA,
-            plot_dir=smoothing_plot_dir,
-            sweep_number=sweep_number,
-        )
+        # Voltage cleaning for negative-current sweeps now happens once upstream
+        # in voltage_cleaning.clean_voltage_for_negative_currents (run from
+        # run_analysis.py before any per-module analysis). The voltage data
+        # passed in here is already cleaned, so no per-sweep smoothing is needed.
 
         # Detect candidate peaks (spikes) in this sweep
         peaks, props = find_peaks(
@@ -406,15 +397,13 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
         if len(baseline_indices) > 0:
             # Use median (robust to noise/outliers)
             v_resting = np.median(voltage[baseline_indices])
-            if VERBOSE:
-                print(f"  ✓ Baseline estimation: {len(baseline_indices)} samples from {baseline_start_time:.6f}s to {baseline_end_time:.6f}s")
-                print(f"    Resting potential (median): {v_resting:.2f} mV")
+            print(f"  ✓ Baseline estimation: {len(baseline_indices)} samples from {baseline_start_time:.6f}s to {baseline_end_time:.6f}s")
+            print(f"    Resting potential (median): {v_resting:.2f} mV")
         else:
             # Fallback: use first 100 samples if no baseline window found
             v_resting = np.median(voltage[:min(100, len(voltage))])
-            if VERBOSE:
-                print(f"  ⚠ No pre-stimulus window found. Using first 100 samples for baseline")
-                print(f"    Resting potential (median): {v_resting:.2f} mV")
+            print(f"  ⚠ No pre-stimulus window found. Using first 100 samples for baseline")
+            print(f"    Resting potential (median): {v_resting:.2f} mV")
         
     # Pre‑calculate spike amplitudes to detect weak/struggling spikes
         spike_amplitudes = []
@@ -426,7 +415,7 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
             amplitude = v_peak_temp - v_resting
             spike_amplitudes.append(amplitude)
         
-        if len(spike_amplitudes) > 0 and VERBOSE:
+        if len(spike_amplitudes) > 0:
             print(f"  ✓ Spike amplitudes calculated (n={len(spike_amplitudes)})")
             print(f"    Range: {np.min(spike_amplitudes):.2f} to {np.max(spike_amplitudes):.2f} mV")
             print(f"    Median: {np.median(spike_amplitudes):.2f} mV")
@@ -438,11 +427,11 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
             peak = int(peak)
             t_peak = float(time[peak])
             v_peak = float(voltage[peak])
-            if VERBOSE: print(f"  peak {i}: index {peak}, t={t_peak:.6f}s, v={v_peak:.2f}mV")
+            print(f"  peak {i}: index {peak}, t={t_peak:.6f}s, v={v_peak:.2f}mV")
 
             # Skip peaks outside the stimulus window (should be rare)
             if (t_peak < sweep_t_min) or (t_peak > sweep_t_max):
-                if VERBOSE: print(f"    INFO: peak at {t_peak:.6f}s outside stimulus window [{sweep_t_min:.6f}, {sweep_t_max:.6f}], skipping.")
+                print(f"    INFO: peak at {t_peak:.6f}s outside stimulus window [{sweep_t_min:.6f}, {sweep_t_max:.6f}], skipping.")
                 continue
 
             # ---------------------------
@@ -673,8 +662,7 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
                     'kink_height_dvdt': np.nan,
                     'kink_idx': None,
                 }
-                if VERBOSE:
-                    print(f"  ⊘ Kink detection skipped for Sweep {sweep_number}, Peak #{i+1} (cell struggling - amplitude {spike_amplitudes[i]:.2f}mV < 60% of median)")
+                print(f"  ⊘ Kink detection skipped for Sweep {sweep_number}, Peak #{i+1} (cell struggling - amplitude {spike_amplitudes[i]:.2f}mV < 60% of median)")
             else:
                 kink_metrics = measure_kink_for_spike(
                     kink_v,
@@ -694,15 +682,16 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
                 print(f"      Kink index: {kink_idx}")
                 print(f"      Max Upstroke index: {up_idx}")
 
-                plot_kink_diagnostics(
-                    voltage,
-                    time,
-                    threshold_idx,
-                    kink_idx,
-                    up_idx,      # max upstroke index
-                    peak_idx,
-                    Path(bundle_path) / "Kink_Diagnostics",
-                    f"sweep{sweep_number}_peak{i}"
+                if plot_preferences.get("kink_diagnostics", True):
+                    plot_kink_diagnostics(
+                        voltage,
+                        time,
+                        threshold_idx,
+                        kink_idx,
+                        up_idx,      # max upstroke index
+                        peak_idx,
+                        Path(bundle_path) / "Kink_Diagnostics",
+                        f"sweep{sweep_number}_peak{i}"
                 )
 
             # Collect per-peak metrics
@@ -835,9 +824,8 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
         #   - Mark threshold, upstroke, peak, fast trough, downstroke
         #   - Matching dV/dt plot
         # ----------------------------------------------------
-        if not skip_plots:
-            plot_dir = Path(bundle_path) / "Averaged_Peaks_Per_Sweep"
-            plot_dir.mkdir(parents=True, exist_ok=True)
+        plot_dir = Path(bundle_path) / "Averaged_Peaks_Per_Sweep"
+        plot_dir.mkdir(parents=True, exist_ok=True)
 
         if valid_spike_segments:
             average_spike = np.mean(valid_spike_segments, axis=0)
@@ -984,76 +972,75 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
                 dbg("WARNING: Fast trough occurs *before* min downstroke - check segmentation.")
 
             # Plot averaged spike & dV/dt with shaded windows
-            if not skip_plots:
-                fig, (ax1, ax2) = plt.subplots(
-                    2,
-                    1,
-                    figsize=(6, 6),
-                    sharex=True,
-                    gridspec_kw={"height_ratios": [2, 1]},
-                )
+            fig, (ax1, ax2) = plt.subplots(
+                2,
+                1,
+                figsize=(6, 6),
+                sharex=True,
+                gridspec_kw={"height_ratios": [2, 1]},
+            )
 
-                # Window 1 & 2 in ms
-                w1_start_ms = -pre_threshold_window_ms
-                w1_end_ms   = 0.0
-                w2_start_ms = 0.0
-                w2_end_ms   = POST_THRESHOLD_WINDOW_PLOT_MS
-                
-                # Build full-length dV/dt for plotting only (NOT for analysis)
-                full_dvdt = np.full_like(spike_time, np.nan, dtype=float)
+            # Window 1 & 2 in ms
+            w1_start_ms = -pre_threshold_window_ms
+            w1_end_ms   = 0.0
+            w2_start_ms = 0.0
+            w2_end_ms   = POST_THRESHOLD_WINDOW_PLOT_MS
 
-                # Pre-peak dV/dt
-                if len(up_region_dvdt) > 0:
-                    full_dvdt[:peak_idx+1] = up_region_dvdt
+            # Build full-length dV/dt for plotting only (NOT for analysis)
+            full_dvdt = np.full_like(spike_time, np.nan, dtype=float)
 
-                # Post-peak dV/dt
-                if len(down_region_dvdt) > 0:
-                    full_dvdt[peak_idx:] = down_region_dvdt
+            # Pre-peak dV/dt
+            if len(up_region_dvdt) > 0:
+                full_dvdt[:peak_idx+1] = up_region_dvdt
 
-                # Vm plot
-                ax1.plot(spike_time, average_spike, color="k", label="Averaged Spike")
-                ax1.axvline(0, color="gray", linestyle="--", label="Peak align")
-                ax1.axvspan(w1_start_ms, w1_end_ms, alpha=0.2, color="orange", label="Window 1 (pre-peak)")
-                ax1.axvspan(w2_start_ms, w2_end_ms, alpha=0.2, color="cyan",   label="Window 2 (post-peak)")
+            # Post-peak dV/dt
+            if len(down_region_dvdt) > 0:
+                full_dvdt[peak_idx:] = down_region_dvdt
 
-                def safe_scatter(ax, x, y, color, label=None):
-                    if x is None or y is None: return
-                    if np.isnan(x) or np.isnan(y): return
-                    ax.scatter(x, y, color=color, label=label)
+            # Vm plot
+            ax1.plot(spike_time, average_spike, color="k", label="Averaged Spike")
+            ax1.axvline(0, color="gray", linestyle="--", label="Peak align")
+            ax1.axvspan(w1_start_ms, w1_end_ms, alpha=0.2, color="orange", label="Window 1 (pre-peak)")
+            ax1.axvspan(w2_start_ms, w2_end_ms, alpha=0.2, color="cyan",   label="Window 2 (post-peak)")
 
-                safe_scatter(ax1, peak_time_ms, peak_val,              "r", label="Peak")
-                safe_scatter(ax1, threshold_time_ms, threshold_val,    "orange", label="Threshold")
-                safe_scatter(ax1, upstroke_time_ms, upstroke_val,      "g", label="Max Upstroke")
-                safe_scatter(ax1, fast_trough_time_ms, fast_trough_val,"b", label="Fast Trough")
-                safe_scatter(ax1, min_downstroke_time_ms, min_downstroke_v_val, "purple", label="Min Downstroke")
+            def safe_scatter(ax, x, y, color, label=None):
+                if x is None or y is None: return
+                if np.isnan(x) or np.isnan(y): return
+                ax.scatter(x, y, color=color, label=label)
 
-                ax1.set_ylabel("Voltage (mV)")
-                ax1.set_title(f"Averaged Spike for Sweep {sweep_number}")
-                ax1.legend(loc="upper right", fontsize=8, frameon=True)
+            safe_scatter(ax1, peak_time_ms, peak_val,              "r", label="Peak")
+            safe_scatter(ax1, threshold_time_ms, threshold_val,    "orange", label="Threshold")
+            safe_scatter(ax1, upstroke_time_ms, upstroke_val,      "g", label="Max Upstroke")
+            safe_scatter(ax1, fast_trough_time_ms, fast_trough_val,"b", label="Fast Trough")
+            safe_scatter(ax1, min_downstroke_time_ms, min_downstroke_v_val, "purple", label="Min Downstroke")
 
-                # dV/dt plot
-                ax2.plot(spike_time, full_dvdt, color="purple", label="dV/dt")
-                ax2.axvline(0, color="gray", linestyle="--")
-                ax2.axvspan(w1_start_ms, w1_end_ms, alpha=0.2, color="orange")
-                ax2.axvspan(w2_start_ms, w2_end_ms, alpha=0.2, color="cyan")
+            ax1.set_ylabel("Voltage (mV)")
+            ax1.set_title(f"Averaged Spike for Sweep {sweep_number}")
+            ax1.legend(loc="upper right", fontsize=8, frameon=True)
+
+            # dV/dt plot
+            ax2.plot(spike_time, full_dvdt, color="purple", label="dV/dt")
+            ax2.axvline(0, color="gray", linestyle="--")
+            ax2.axvspan(w1_start_ms, w1_end_ms, alpha=0.2, color="orange")
+            ax2.axvspan(w2_start_ms, w2_end_ms, alpha=0.2, color="cyan")
 
 
-                safe_scatter(ax2, threshold_time_ms, threshold_dvdt_val,      "orange")
-                safe_scatter(ax2, upstroke_time_ms, up_region_dvdt[int(up_idx)] if up_idx is not None else np.nan, "g")
-                safe_scatter(ax2, peak_time_ms, 0,                             "r")   # dV/dt ≈ 0 at peak
-                safe_scatter(ax2, fast_trough_time_ms, fast_trough_dvdt,       "b")
-                safe_scatter(ax2, min_downstroke_time_ms, min_downstroke_val,  "purple")
+            safe_scatter(ax2, threshold_time_ms, threshold_dvdt_val,      "orange")
+            safe_scatter(ax2, upstroke_time_ms, up_region_dvdt[int(up_idx)] if up_idx is not None else np.nan, "g")
+            safe_scatter(ax2, peak_time_ms, 0,                             "r")   # dV/dt ≈ 0 at peak
+            safe_scatter(ax2, fast_trough_time_ms, fast_trough_dvdt,       "b")
+            safe_scatter(ax2, min_downstroke_time_ms, min_downstroke_val,  "purple")
 
-                ax2.set_xlabel("Time Difference from Peak (ms)")
-                ax2.set_ylabel("dV/dt (mV/ms)")
-                ax2.legend(loc="best", fontsize=8)
+            ax2.set_xlabel("Time Difference from Peak (ms)")
+            ax2.set_ylabel("dV/dt (mV/ms)")
+            ax2.legend(loc="best", fontsize=8)
 
-                plt.tight_layout()
-                out_dir = Path(bundle_path) / "Averaged_Peaks_Per_Sweep"
-                out_dir.mkdir(parents=True, exist_ok=True)
-                plt.savefig(out_dir / f"averaged_peaks_for_sweep_{sweep_number}.jpeg")
-                plt.close()
-                #plt.show()
+            plt.tight_layout()
+            out_dir = Path(bundle_path) / "Averaged_Peaks_Per_Sweep"
+            out_dir.mkdir(parents=True, exist_ok=True)
+            plt.savefig(out_dir / f"averaged_peaks_for_sweep_{sweep_number}.jpeg")
+            plt.close()
+            #plt.show()
         else:
             print(f"    WARNING: No valid spikes for sweep {sweep_number}, skipping averaged plot.")
 
@@ -1259,7 +1246,7 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
         avg_pa_per_sweep["avg_injected_current_pA"] = avg_pa_per_sweep["avg_injected_current_pA_rounded"]
         avg_pa_per_sweep = avg_pa_per_sweep.drop(columns=["avg_injected_current_pA_rounded"])
         dbg(f"Rounded per-sweep currents to nearest 5 pA (preview first 10):")
-        if VERBOSE: print(avg_pa_per_sweep.head(10).to_string())
+        print(avg_pa_per_sweep.head(10).to_string())
 
     # #-------------Create Dataframes-----------------
     results_df = pd.DataFrame(sweep_results)
@@ -1302,146 +1289,145 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
 
     df_peak_level = pd.DataFrame(rows)
 
-    if VERBOSE: print("PEAK LEVEL DATAFRAME",df_peak_level)
+    print("PEAK LEVEL DATAFRAME",df_peak_level)
 
     # ----------------- Plot AP per sweep with labeled peaks -----------------
-    if not skip_plots:
-        plot_dir = Path(bundle_path) / "AP_Per_Sweep"
-        plot_dir.mkdir(parents=True, exist_ok=True)
+    plot_dir = Path(bundle_path) / "AP_Per_Sweep"
+    plot_dir.mkdir(parents=True, exist_ok=True)
 
-        for sweep_number in sorted(filtered_peaks.keys()):
-            # Get the FULL sweep data for this sweep (unfiltered to get true sweep offset)
-            group_full = df[(df["sweep"] == sweep_number)].sort_values("t_s")
-            sweep_offset = group_full["t_s"].min()  # True start of the sweep
-            time_full = group_full["t_s"].to_numpy()  # Full sweep times for peak lookup
-            volt_full = group_full["value"].to_numpy()  # Full sweep voltages for peak lookup
-            
-            # For mixed protocol, get THIS sweep's specific time windows and convert to relative times
-            # For single protocol, use absolute times
-            if is_mixed and sweep_config is not None:
-                try:
-                    sweep_cfg = sweep_config["sweeps"].get(str(sweep_number), {})
-                    if sweep_cfg and "windows" in sweep_cfg:
-                        # For mixed protocol: sweep_config contains ABSOLUTE times
-                        sweep_t_start_abs = sweep_cfg["windows"]["stimulus_start_s"]
-                        sweep_t_end_abs = sweep_cfg["windows"]["stimulus_end_s"]
-                        
-                        # Get sweep's starting time for converting to relative plotting
-                        sweep_offset = group_full["t_s"].min()
-                        
-                        # Define plot window in ABSOLUTE times
-                        plot_t_min = max(sweep_offset, sweep_t_start_abs - 0.02)
-                        plot_t_max = sweep_t_end_abs + 0.02
-                        
-                        # Will convert to relative times for plotting
-                        use_relative_times = True
-                        sweep_relative_t_start = sweep_t_start_abs - sweep_offset
-                        sweep_relative_t_end = sweep_t_end_abs - sweep_offset
-                    else:
-                        use_relative_times = False
-                        plot_t_min = max(t_stim_start - 0.1, t_stim_start - 0.02)
-                        plot_t_max = t_stim_end + 0.02
-                except (KeyError, TypeError):
+    for sweep_number in sorted(filtered_peaks.keys()):
+        # Get the FULL sweep data for this sweep (unfiltered to get true sweep offset)
+        group_full = df[(df["sweep"] == sweep_number)].sort_values("t_s")
+        sweep_offset = group_full["t_s"].min()  # True start of the sweep
+        time_full = group_full["t_s"].to_numpy()  # Full sweep times for peak lookup
+        volt_full = group_full["value"].to_numpy()  # Full sweep voltages for peak lookup
+        
+        # For mixed protocol, get THIS sweep's specific time windows and convert to relative times
+        # For single protocol, use absolute times
+        if is_mixed and sweep_config is not None:
+            try:
+                sweep_cfg = sweep_config["sweeps"].get(str(sweep_number), {})
+                if sweep_cfg and "windows" in sweep_cfg:
+                    # For mixed protocol: sweep_config contains ABSOLUTE times
+                    sweep_t_start_abs = sweep_cfg["windows"]["stimulus_start_s"]
+                    sweep_t_end_abs = sweep_cfg["windows"]["stimulus_end_s"]
+                    
+                    # Get sweep's starting time for converting to relative plotting
+                    sweep_offset = group_full["t_s"].min()
+                    
+                    # Define plot window in ABSOLUTE times
+                    plot_t_min = max(sweep_offset, sweep_t_start_abs - 0.02)
+                    plot_t_max = sweep_t_end_abs + 0.02
+                    
+                    # Will convert to relative times for plotting
+                    use_relative_times = True
+                    sweep_relative_t_start = sweep_t_start_abs - sweep_offset
+                    sweep_relative_t_end = sweep_t_end_abs - sweep_offset
+                else:
                     use_relative_times = False
                     plot_t_min = max(t_stim_start - 0.1, t_stim_start - 0.02)
                     plot_t_max = t_stim_end + 0.02
-            else:
-                # Single protocol: use absolute times
+            except (KeyError, TypeError):
                 use_relative_times = False
                 plot_t_min = max(t_stim_start - 0.1, t_stim_start - 0.02)
                 plot_t_max = t_stim_end + 0.02
-            
-            # Filter to the plot window
-            if use_relative_times:
-                # For mixed: filter using absolute times, then convert to relative for plotting
-                group_plot = group_full[(group_full["t_s"] >= plot_t_min) & 
-                                       (group_full["t_s"] <= plot_t_max)]
-                # Convert times to RELATIVE (0-based from sweep start) for plotting
-                time_plot = (group_plot["t_s"].to_numpy() - sweep_offset) * 1000  # Convert to ms relative
-                time_offset_for_peaks = sweep_offset
-            else:
-                # For single: use absolute times
-                group_plot = group_full[(group_full["t_s"] >= plot_t_min) & (group_full["t_s"] <= plot_t_max)]
-                time_plot = group_plot["t_s"].to_numpy()  # Absolute times
-                time_offset_for_peaks = 0
-            
-            volt_plot = group_plot["value"].to_numpy()
-            peaks_plot = filtered_peaks.get(sweep_number, [])
+        else:
+            # Single protocol: use absolute times
+            use_relative_times = False
+            plot_t_min = max(t_stim_start - 0.1, t_stim_start - 0.02)
+            plot_t_max = t_stim_end + 0.02
+        
+        # Filter to the plot window
+        if use_relative_times:
+            # For mixed: filter using absolute times, then convert to relative for plotting
+            group_plot = group_full[(group_full["t_s"] >= plot_t_min) & 
+                                    (group_full["t_s"] <= plot_t_max)]
+            # Convert times to RELATIVE (0-based from sweep start) for plotting
+            time_plot = (group_plot["t_s"].to_numpy() - sweep_offset) * 1000  # Convert to ms relative
+            time_offset_for_peaks = sweep_offset
+        else:
+            # For single: use absolute times
+            group_plot = group_full[(group_full["t_s"] >= plot_t_min) & (group_full["t_s"] <= plot_t_max)]
+            time_plot = group_plot["t_s"].to_numpy()  # Absolute times
+            time_offset_for_peaks = 0
+        
+        volt_plot = group_plot["value"].to_numpy()
+        peaks_plot = filtered_peaks.get(sweep_number, [])
 
-            plt.figure(figsize=(10, 4))
-            plt.plot(time_plot, volt_plot, label="Voltage (mV)")
+        plt.figure(figsize=(10, 4))
+        plt.plot(time_plot, volt_plot, label="Voltage (mV)")
+        
+        # Add stimulus window markers if analysis_windows available
+        if analysis_windows is not None:
+            if use_relative_times:
+                # For mixed protocol: stimulus window in RELATIVE times (ms) for plotting
+                t_stim_start = sweep_relative_t_start * 1000
+                t_stim_end = sweep_relative_t_end * 1000
+            else:
+                # For single protocol: stimulus window in ABSOLUTE times
+                t_stim_start = analysis_windows.get('t_stim_start')
+                t_stim_end = analysis_windows.get('t_stim_end')
             
-            # Add stimulus window markers if analysis_windows available
-            if analysis_windows is not None:
+            if t_stim_start is not None and t_stim_end is not None:
+                # Add vertical lines at stimulus boundaries
+                plt.axvline(x=t_stim_start, color='green', linestyle='--', linewidth=2, alpha=0.7, label='Stimulus start')
+                plt.axvline(x=t_stim_end, color='orange', linestyle='--', linewidth=2, alpha=0.7, label='Stimulus end')
+                # Optional: shade the stimulus region
+                plt.axvspan(t_stim_start, t_stim_end, alpha=0.1, color='yellow', label='Stimulus window')
+        
+        if peaks_plot:
+            # filtered_peaks stores (indices, times) tuple
+            if isinstance(peaks_plot, tuple):
+                peak_indices_in_filtered = np.array(peaks_plot[0])  # Indices into filtered window
+                peak_times_abs = np.array(peaks_plot[1])  # Absolute times (already converted during detection)
+            else:
+                # Fallback for old format
+                peak_indices_in_filtered = np.array(peaks_plot)
+                peak_times_abs = time_full[peak_indices_in_filtered]
+            
+            if len(peak_times_abs) > 0 and len(peak_indices_in_filtered) > 0:
+                # Get stimulus window for filtering (in absolute times)
                 if use_relative_times:
-                    # For mixed protocol: stimulus window in RELATIVE times (ms) for plotting
-                    plot_stim_start = sweep_relative_t_start * 1000
-                    plot_stim_end = sweep_relative_t_end * 1000
+                    # For mixed protocol: convert relative times back to absolute for comparison
+                    stim_t_min = sweep_offset + sweep_relative_t_start
+                    stim_t_max = sweep_offset + sweep_relative_t_end
                 else:
-                    # For single protocol: stimulus window in ABSOLUTE times
-                    plot_stim_start = analysis_windows.get('t_stim_start')
-                    plot_stim_end = analysis_windows.get('t_stim_end')
+                    stim_t_min = t_stim_start
+                    stim_t_max = t_stim_end
                 
-                if plot_stim_start is not None and plot_stim_end is not None:
-                    # Add vertical lines at stimulus boundaries
-                    plt.axvline(x=plot_stim_start, color='green', linestyle='--', linewidth=2, alpha=0.7, label='Stimulus start')
-                    plt.axvline(x=plot_stim_end, color='orange', linestyle='--', linewidth=2, alpha=0.7, label='Stimulus end')
-                    # Optional: shade the stimulus region
-                    plt.axvspan(plot_stim_start, plot_stim_end, alpha=0.1, color='yellow', label='Stimulus window')
-            
-            if peaks_plot:
-                # filtered_peaks stores (indices, times) tuple
-                if isinstance(peaks_plot, tuple):
-                    peak_indices_in_filtered = np.array(peaks_plot[0])  # Indices into filtered window
-                    peak_times_abs = np.array(peaks_plot[1])  # Absolute times (already converted during detection)
-                else:
-                    # Fallback for old format
-                    peak_indices_in_filtered = np.array(peaks_plot)
-                    peak_times_abs = time_full[peak_indices_in_filtered]
+                # Filter to peaks within stimulus window
+                stim_mask = (peak_times_abs >= stim_t_min) & (peak_times_abs <= stim_t_max)
+                peak_times_stim = peak_times_abs[stim_mask]
+                peak_indices_stim = peak_indices_in_filtered[stim_mask]
                 
-                if len(peak_times_abs) > 0 and len(peak_indices_in_filtered) > 0:
-                    # Get stimulus window for filtering (in absolute times)
-                    if use_relative_times:
-                        # For mixed protocol: convert relative times back to absolute for comparison
-                        stim_t_min = sweep_offset + sweep_relative_t_start
-                        stim_t_max = sweep_offset + sweep_relative_t_end
-                    else:
-                        stim_t_min = t_stim_start
-                        stim_t_max = t_stim_end
-                    
-                    # Filter to peaks within stimulus window
-                    stim_mask = (peak_times_abs >= stim_t_min) & (peak_times_abs <= stim_t_max)
-                    peak_times_stim = peak_times_abs[stim_mask]
-                    peak_indices_stim = peak_indices_in_filtered[stim_mask]
-                    
-                    if len(peak_times_stim) > 0 and len(peak_indices_stim) > 0:
-                        # Get peak voltages from peak_level_data (already have actual voltage values)
-                        if sweep_number in peak_level_data:
-                            peak_volt_array = np.array(peak_level_data[sweep_number]["AP_Height_mV"])
-                            # Get voltages for the filtered peaks
-                            peak_volts_stim = peak_volt_array[stim_mask]
-                            
-                            # Convert peak times to plot coordinate system
-                            if use_relative_times:
-                                peak_times_plot = (peak_times_stim - sweep_offset) * 1000  # Relative in ms
-                            else:
-                                peak_times_plot = peak_times_stim  # Absolute times
-                            
-                            # Plot peaks directly with their times and voltages
-                            plt.plot(peak_times_plot, peak_volts_stim, "r*", markersize=12, label="Valid Peaks")
+                if len(peak_times_stim) > 0 and len(peak_indices_stim) > 0:
+                    # Get peak voltages from peak_level_data (already have actual voltage values)
+                    if sweep_number in peak_level_data:
+                        peak_volt_array = np.array(peak_level_data[sweep_number]["AP_Height_mV"])
+                        # Get voltages for the filtered peaks
+                        peak_volts_stim = peak_volt_array[stim_mask]
+                        
+                        # Convert peak times to plot coordinate system
+                        if use_relative_times:
+                            peak_times_plot = (peak_times_stim - sweep_offset) * 1000  # Relative in ms
+                        else:
+                            peak_times_plot = peak_times_stim  # Absolute times
+                        
+                        # Plot peaks directly with their times and voltages
+                        plt.plot(peak_times_plot, peak_volts_stim, "r*", markersize=12, label="Valid Peaks")
 
-            plt.title(f"Sweep {sweep_number}")
-            if use_relative_times:
-                plt.xlabel("Time (ms) - Relative to Sweep Start")
-            else:
-                plt.xlabel("Time (s)")
-            plt.ylabel("Voltage (mV)")
-            plt.legend(loc="upper right", frameon=True)
-            plt.grid(True)
-            plt.tight_layout()
-            plt.savefig(plot_dir / f"AP_sweep_{sweep_number}.jpeg")
-            plt.close()
-            #plt.show()
+        plt.title(f"Sweep {sweep_number}")
+        if use_relative_times:
+            plt.xlabel("Time (ms) - Relative to Sweep Start")
+        else:
+            plt.xlabel("Time (s)")
+        plt.ylabel("Voltage (mV)")
+        plt.legend(loc="upper right", frameon=True)
+        plt.grid(True)
+        plt.tight_layout()
+        plt.savefig(plot_dir / f"AP_sweep_{sweep_number}.jpeg")
+        plt.close()
+        #plt.show()
 
     # ----------------- Merge with analysis + manifest -----------------
     # Handle case where df_analysis is empty or not provided
@@ -1465,78 +1451,8 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
     updated_analysis.to_parquet(Path(bundle_path) / "analysis.parquet", index=False)
     updated_analysis.to_csv(Path(bundle_path) / "analysis.csv", index=False)
 
-    # =========================================================================
-    # Generate min_frequency.csv - minimum current required to produce APs
-    # =========================================================================
-    rows_with_spikes_for_min_freq = updated_analysis[updated_analysis["spike_frequency_Hz"] > 0]
-    
-    if not rows_with_spikes_for_min_freq.empty:
-        # Find the minimum current that produces spikes
-        min_current_with_spikes = rows_with_spikes_for_min_freq["avg_injected_current_pA"].min()
-        min_freq_row = rows_with_spikes_for_min_freq[
-            rows_with_spikes_for_min_freq["avg_injected_current_pA"] == min_current_with_spikes
-        ]
-        min_freq_row.to_csv(Path(bundle_path) / "min_frequency.csv", index=False)
-        print(f"\n✓ Saved min_frequency.csv (min current with APs: {min_current_with_spikes:.2f} pA)")
-    else:
-        # No spikes detected - save empty file with headers
-        updated_analysis.iloc[:0].to_csv(Path(bundle_path) / "min_frequency.csv", index=False)
-        print("\n⚠ No spikes detected - min_frequency.csv saved with headers only")
-
-    # =========================================================================
-    # Generate max_frequency.csv - current with maximum AP frequency
-    # =========================================================================
-    if not rows_with_spikes_for_min_freq.empty:
-        # Find the maximum spike frequency
-        max_freq = rows_with_spikes_for_min_freq["spike_frequency_Hz"].max()
-        max_freq_row = rows_with_spikes_for_min_freq[
-            rows_with_spikes_for_min_freq["spike_frequency_Hz"] == max_freq
-        ]
-        max_freq_row.to_csv(Path(bundle_path) / "max_frequency.csv", index=False)
-        max_freq_current = max_freq_row["avg_injected_current_pA"].iloc[0]
-        print(f"✓ Saved max_frequency.csv (max freq: {max_freq:.2f} Hz at {max_freq_current:.2f} pA)")
-    else:
-        # No spikes detected - save empty file with headers
-        updated_analysis.iloc[:0].to_csv(Path(bundle_path) / "max_frequency.csv", index=False)
-        print("⚠ No spikes detected - max_frequency.csv saved with headers only")
-
-    # =========================================================================
-    # Generate mean_frequency.csv - mean of all columns up to max frequency row
-    # =========================================================================
-    if not rows_with_spikes_for_min_freq.empty:
-        # Find the row index of maximum frequency
-        max_freq = rows_with_spikes_for_min_freq["spike_frequency_Hz"].max()
-        max_freq_idx = rows_with_spikes_for_min_freq[
-            rows_with_spikes_for_min_freq["spike_frequency_Hz"] == max_freq
-        ].index[0]
-        
-        # Get all rows up to and including the max frequency row
-        # (using the original updated_analysis to include all sweeps in order)
-        rows_up_to_max = updated_analysis.loc[:max_freq_idx]
-        
-        # Calculate mean of numeric columns only
-        numeric_cols = rows_up_to_max.select_dtypes(include=[np.number]).columns
-        mean_values = rows_up_to_max[numeric_cols].mean()
-        
-        # Create a single-row DataFrame with mean values
-        mean_df = pd.DataFrame([mean_values])
-        
-        # Add non-numeric columns as NaN or first value (for reference)
-        non_numeric_cols = rows_up_to_max.select_dtypes(exclude=[np.number]).columns
-        for col in non_numeric_cols:
-            mean_df[col] = rows_up_to_max[col].iloc[0] if len(rows_up_to_max) > 0 else np.nan
-        
-        # Reorder columns to match original
-        mean_df = mean_df[updated_analysis.columns]
-        mean_df.to_csv(Path(bundle_path) / "mean_frequency.csv", index=False)
-        print(f"✓ Saved mean_frequency.csv (mean of {len(rows_up_to_max)} rows up to max freq)")
-    else:
-        # No spikes detected - save empty file with headers
-        updated_analysis.iloc[:0].to_csv(Path(bundle_path) / "mean_frequency.csv", index=False)
-        print("⚠ No spikes detected - mean_frequency.csv saved with headers only")
-
     # Current threshold = first sweep with any spikes
-    if VERBOSE: print("\n--- Calculating current threshold ---")
+    print("\n--- Calculating current threshold ---")
     dbg(f"Total sweeps: {len(updated_analysis)}")
     dbg(f"Sweeps with spikes: {(updated_analysis['spike_frequency_Hz'] > 0).sum()}")
     dbg(f"Current values (first 10): {updated_analysis['avg_injected_current_pA'].head(10).tolist()}")
@@ -1581,111 +1497,48 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
     # # =====================================================================
     # # Generate GIF from AP_Per_Sweep and Averaged_Peaks_Per_Sweep figures
     # # =====================================================================
-    if not skip_plots:
-        try:
-            from PIL import Image
-            import os
-            
-            if VERBOSE: print("GENERATING GIFs from analysis plots...")
-            
-            # Generate GIF for AP_Per_Sweep
-            ap_sweep_dir = bundle_path / "AP_Per_Sweep"
-            if ap_sweep_dir.exists():
-                ap_files = sorted(ap_sweep_dir.glob("AP_sweep_*.jpeg"))
-                if ap_files:
-                    if VERBOSE: print(f"  Creating GIF from {len(ap_files)} AP_Per_Sweep figures...")
-                    images = [Image.open(f) for f in ap_files]
-                    gif_path = bundle_path / "AP_Per_Sweep_animation.gif"
-                    images[0].save(
-                        gif_path,
-                        save_all=True,
-                        append_images=images[1:],
-                        duration=500,  # 500ms per frame
-                        loop=0
-                    )
-                    print(f"  [OK] Saved AP_Per_Sweep GIF to {gif_path.name}")
-            
-            # Generate GIF for Averaged_Peaks_Per_Sweep
-            avg_peaks_dir = bundle_path / "Averaged_Peaks_Per_Sweep"
-            if avg_peaks_dir.exists():
-                avg_files = sorted(avg_peaks_dir.glob("Averaged_*.jpeg"))
-                if avg_files:
-                    if VERBOSE: print(f"  Creating GIF from {len(avg_files)} Averaged_Peaks_Per_Sweep figures...")
-                    images = [Image.open(f) for f in avg_files]
-                    gif_path = bundle_path / "Averaged_Peaks_Per_Sweep_animation.gif"
-                    images[0].save(
-                        gif_path,
-                        save_all=True,
-                        append_images=images[1:],
-                        duration=500,  # 500ms per frame
-                        loop=0
-                    )
-                    print(f"  [OK] Saved Averaged_Peaks_Per_Sweep GIF to {gif_path.name}")
-            
-            # =====================================================================
-            # Generate COMBINED plots (grid of all sweeps in one image)
-            # =====================================================================
-            # Combined AP_Per_Sweep plot
-            if ap_sweep_dir.exists():
-                ap_files = sorted(ap_sweep_dir.glob("AP_sweep_*.jpeg"))
-                if ap_files:
-                    n_plots = len(ap_files)
-                    # Calculate grid dimensions (aim for roughly square)
-                    n_cols = min(4, n_plots)  # Max 4 columns
-                    n_rows = (n_plots + n_cols - 1) // n_cols
-                    
-                    fig, axes = plt.subplots(n_rows, n_cols, figsize=(5 * n_cols, 4 * n_rows))
-                    if n_plots == 1:
-                        axes = np.array([axes])
-                    axes = axes.flatten()
-                    
-                    for idx, img_path in enumerate(ap_files):
-                        img = Image.open(img_path)
-                        axes[idx].imshow(img)
-                        axes[idx].axis('off')
-                        # Extract sweep number from filename for title
-                        sweep_num = img_path.stem.replace("AP_sweep_", "")
-                        axes[idx].set_title(f"Sweep {sweep_num}", fontsize=10)
-                    
-                    # Hide unused subplots
-                    for idx in range(n_plots, len(axes)):
-                        axes[idx].axis('off')
-                    
-                    plt.tight_layout()
-                    plt.close()
-            
-            # Combined Averaged_Peaks_Per_Sweep plot
-            if avg_peaks_dir.exists():
-                avg_files = sorted(avg_peaks_dir.glob("Averaged_*.jpeg"))
-                if avg_files:
-                    n_plots = len(avg_files)
-                    # Calculate grid dimensions (aim for roughly square)
-                    n_cols = min(4, n_plots)  # Max 4 columns
-                    n_rows = (n_plots + n_cols - 1) // n_cols
-                    
-                    fig, axes = plt.subplots(n_rows, n_cols, figsize=(5 * n_cols, 5 * n_rows))
-                    if n_plots == 1:
-                        axes = np.array([axes])
-                    axes = axes.flatten()
-                    
-                    for idx, img_path in enumerate(avg_files):
-                        img = Image.open(img_path)
-                        axes[idx].imshow(img)
-                        axes[idx].axis('off')
-                        # Extract sweep number from filename for title
-                        sweep_num = img_path.stem.replace("averaged_peaks_for_sweep_", "")
-                        axes[idx].set_title(f"Sweep {sweep_num}", fontsize=10)
-                    
-                    # Hide unused subplots
-                    for idx in range(n_plots, len(axes)):
-                        axes[idx].axis('off')
-                    
-                    plt.tight_layout()
-                    plt.close()
-                    
-        except ImportError:
-            dbg("  WARNING: PIL (Pillow) not installed. Skipping GIF generation.")
-            print("  Install with: pip install Pillow")
+    # try:
+    #     from PIL import Image
+    #     import os
+        
+    #     print("GENERATING GIFs from analysis plots...")
+        
+    #     # Generate GIF for AP_Per_Sweep
+    #     ap_sweep_dir = bundle_path / "AP_Per_Sweep"
+    #     if ap_sweep_dir.exists():
+    #         ap_files = sorted(ap_sweep_dir.glob("AP_sweep_*.jpeg"))
+    #         if ap_files:
+    #             print(f"  Creating GIF from {len(ap_files)} AP_Per_Sweep figures...")
+    #             images = [Image.open(f) for f in ap_files]
+    #             gif_path = bundle_path / "AP_Per_Sweep_animation.gif"
+    #             images[0].save(
+    #                 gif_path,
+    #                 save_all=True,
+    #                 append_images=images[1:],
+    #                 duration=500,  # 500ms per frame
+    #                 loop=0
+    #             )
+    #             print(f"  [OK] Saved AP_Per_Sweep GIF to {gif_path.name}")
+        
+    #     # Generate GIF for Averaged_Peaks_Per_Sweep
+    #     avg_peaks_dir = bundle_path / "Averaged_Peaks_Per_Sweep"
+    #     if avg_peaks_dir.exists():
+    #         avg_files = sorted(avg_peaks_dir.glob("Averaged_*.jpeg"))
+    #         if avg_files:
+    #             print(f"  Creating GIF from {len(avg_files)} Averaged_Peaks_Per_Sweep figures...")
+    #             images = [Image.open(f) for f in avg_files]
+    #             gif_path = bundle_path / "Averaged_Peaks_Per_Sweep_animation.gif"
+    #             images[0].save(
+    #                 gif_path,
+    #                 save_all=True,
+    #                 append_images=images[1:],
+    #                 duration=500,  # 500ms per frame
+    #                 loop=0
+    #             )
+    #             print(f"  [OK] Saved Averaged_Peaks_Per_Sweep GIF to {gif_path.name}")           
+    # except ImportError:
+    #     dbg("  WARNING: PIL (Pillow) not installed. Skipping GIF generation.")
+    #     print("  Install with: pip install Pillow")
     
     # Return results for further processing
     print(f"  ℹ Total struggling-cell kink skips (bundle): {total_struggling_kink_skips}")

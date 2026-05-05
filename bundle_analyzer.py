@@ -7,6 +7,10 @@ Main driver for analyzing NWB files through the complete analysis pipeline.
 Two-Step Workflow:
   STEP 1: Data Preparation (process_human_data.py)
     • Takes NWB files from a directory
+       print(f"\n[STEP 3] Skipped (--skip-analysis flag set)")
+       print(f"\n✓ sweep_config.json created. Ready for manual review/editing.")
+       print(f"  Location: {bundle_path / 'sweep_config.json'}")
+       sys.exit(0)
     • Extracts voltage and current traces
     • Converts to parquet format
     • Creates manifest.json with metadata
@@ -28,9 +32,6 @@ Usage:
 """
 
 import sys
-
-# Set to True to enable verbose/debug output in terminal
-VERBOSE = False
 from pathlib import Path
 import argparse
 from pynwb import NWBHDF5IO
@@ -64,11 +65,6 @@ def main():
         help="Only create sweep_config.json, skip spike detection"
     )
     parser.add_argument(
-        "--skip-plots",
-        action="store_true",
-        help="Skip generating plots for faster analysis"
-    )
-    parser.add_argument(
         "--no-checkpoints",
         action="store_true",
         help="Skip interactive checkpoint prompts during analysis"
@@ -91,10 +87,9 @@ def main():
             print(f"This doesn't look like a valid bundle directory.")
             sys.exit(1)
     
-    if VERBOSE:
-        print("\n" + "="*70)
-        print("STEP 2: ANALYSIS PIPELINE")
-        print("="*70)
+    print("\n" + "="*70)
+    print("STEP 2: ANALYSIS PIPELINE")
+    print("="*70)
     
     # ========================================================================
     # STEP 1: Process bundle → Create sweep_config.json
@@ -112,10 +107,9 @@ def main():
     # ========================================================================
     # STEP 2: Visualize sweep classification (optional user prompt)
     # ========================================================================
-    if VERBOSE:
-        print(f"\n[STEP 2] Sweep Classification Visualization")
-        print(f"  Would you like to visualize the kept vs dropped sweeps?")
-        print(f"  This will create JPEG plots showing which sweeps were kept and rejected.")
+    print(f"\n[STEP 2] Sweep Classification Visualization")
+    print(f"  Would you like to visualize the kept vs dropped sweeps?")
+    print(f"  This will create JPEG plots showing which sweeps were kept and rejected.")
     
     # Auto-yes visualization
     viz_choice = "yes"
@@ -123,7 +117,7 @@ def main():
         try:
             kept_sweeps = [int(k) for k, v in sweep_config.get('sweeps', {}).items() if v.get('valid')]
             dropped_sweeps = [int(k) for k, v in sweep_config.get('sweeps', {}).items() if not v.get('valid')]
-            if VERBOSE: print(f"\n  Creating visualization ({len(kept_sweeps)} kept, {len(dropped_sweeps)} dropped)...")
+            print(f"\n  Creating visualization ({len(kept_sweeps)} kept, {len(dropped_sweeps)} dropped)...")
             
             # Check if mixed protocol and use appropriate visualization function
             import json
@@ -133,7 +127,7 @@ def main():
             is_mixed = "stimulus" in manifest["tables"] and "response" in manifest["tables"]
             
             if is_mixed:
-                if VERBOSE: print(f"  Detected mixed protocol - using specialized visualization")
+                print(f"  Detected mixed protocol - using specialized visualization")
                 print(f"  🔄 Creating mixed protocol visualizations...")
                 visualize_mixed_protocol_sweeps(str(bundle_path), kept_sweeps, dropped_sweeps)
                 print(f"  ✓ Mixed protocol visualizations complete")
@@ -158,16 +152,15 @@ def main():
     
     # Auto-yes proceed with analysis
     checkpoint_ok = True
-    if VERBOSE: print(f"\n  Auto-proceeding with analysis...")
+
     
     # ========================================================================
     # STEP 3: Run full analysis (if not skipped)
     # ========================================================================
     if args.skip_analysis:
-        if VERBOSE:
-            print(f"\n[STEP 3] Skipped (--skip-analysis flag set)")
-            print(f"\n✓ sweep_config.json created. Ready for manual review/editing.")
-            print(f"  Location: {bundle_path / 'sweep_config.json'}")
+        print(f"\n[STEP 3] Skipped (--skip-analysis flag set)")
+        print(f"\n✓ sweep_config.json created. Ready for manual review/editing.")
+        print(f"  Location: {bundle_path / 'sweep_config.json'}")
         sys.exit(0)
     
     print(f"\n[STEP 3] Running full analysis pipeline...")
@@ -178,7 +171,6 @@ def main():
     try:
         run_for_bundle(
             str(bundle_path),
-            skip_plots=args.skip_plots,
             no_checkpoints=args.no_checkpoints,
         )
         print(f"  ✓ Finished bundle: {bundle_path.name}")

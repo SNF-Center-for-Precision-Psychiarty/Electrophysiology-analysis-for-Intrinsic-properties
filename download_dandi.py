@@ -17,7 +17,6 @@ import time
 import requests
 from pathlib import Path
 
-VERBOSE = False
 
 DANDI_API = "https://api.dandiarchive.org/api"
 
@@ -106,24 +105,21 @@ def main():
             sys.exit(1)
 
     dandiset_id = args.dandiset.lstrip("0") and args.dandiset  # keep leading zeros
-    if VERBOSE:
-        print(f"\n{'='*60}")
-        print(f"DANDI Downloader — Dandiset {dandiset_id}")
-        print(f"{'='*60}")
+    print(f"\n{'='*60}")
+    print(f"DANDI Downloader — Dandiset {dandiset_id}")
+    print(f"{'='*60}")
 
     # Fetch info
     try:
         info = get_dandiset_info(dandiset_id)
         name = info.get("draft_version", {}).get("name", "Unknown")
-        if VERBOSE:
-            print(f"Name: {name}")
+        print(f"Name: {name}")
     except requests.HTTPError as e:
         print(f"ERROR: Could not find dandiset {dandiset_id} ({e})")
         sys.exit(1)
 
     # Collect assets
-    if VERBOSE:
-        print(f"\nFetching asset list...")
+    print(f"\nFetching asset list...")
     assets = []
     for asset in list_assets(dandiset_id, args.version):
         path = asset.get("path", "")
@@ -141,28 +137,24 @@ def main():
         sys.exit(0)
 
     # Show preview
-    if VERBOSE:
-        print(f"\n{'Path':<65} {'Size':>10}")
-        print("-" * 77)
+    print(f"\n{'Path':<65} {'Size':>10}")
+    print("-" * 77)
     total_size = 0
     show_assets = assets[: min(20, len(assets))]
     for a in show_assets:
         sz = a.get("size", 0)
         total_size += sz
         mb = sz / 1e6
-        if VERBOSE:
-            print(f"  {a['path']:<63} {mb:>7.1f} MB")
+        print(f"  {a['path']:<63} {mb:>7.1f} MB")
     remaining = len(assets) - len(show_assets)
     if remaining > 0:
         # Sum remaining sizes
         for a in assets[len(show_assets):]:
             total_size += a.get("size", 0)
-        if VERBOSE:
-            print(f"  ... and {remaining} more files")
+        print(f"  ... and {remaining} more files")
 
     total_gb = total_size / 1e9
-    if VERBOSE:
-        print(f"\nTotal size: {total_gb:.2f} GB")
+    print(f"\nTotal size: {total_gb:.2f} GB")
 
     if args.list_only:
         sys.exit(0)
@@ -170,8 +162,7 @@ def main():
     # Apply max-files limit
     if args.max_files > 0:
         assets = assets[: args.max_files]
-        if VERBOSE:
-            print(f"\nLimited to first {args.max_files} file(s)")
+        print(f"\nLimited to first {args.max_files} file(s)")
 
     # Confirm download
     if not args.max_files and len(assets) > 5:

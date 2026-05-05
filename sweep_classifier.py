@@ -32,12 +32,14 @@ from analysis_config import (
     RESPONSE_PADDING_S,
     BASELINE_FALLBACK_S,
     SECOND_DERIV_THRESHOLD,
+    ARTIFACT_DETECTION_VOLTAGE_CUTOFF_MV,
 )
 
 warnings.filterwarnings('ignore', message='.*cached namespace.*')
 
-# Set to True to enable verbose/debug output in terminal
-VERBOSE = False
+
+def dbg(msg):
+    print(f"[DEBUG] {msg}")
 
 # Legacy commented-out function uses old thresholds
 # Active code uses thresholds defined in CONFIGURATION section below (lines ~419-424)
@@ -626,8 +628,8 @@ def detect_right_angle_in_voltage(voltage, time, stim_start, stim_end, sampling_
             description: string describing the artifact if found
     """
     # Debug: print time range for first few sweeps
-    if VERBOSE and sweep_id is not None and sweep_id <= 10:
-        print(f"  [DEBUG] Sweep {sweep_id}: Checking voltage in time range [{stim_start:.6f}, {stim_end:.6f}] s")
+    if sweep_id is not None and sweep_id <= 10:
+        dbg(f"Sweep {sweep_id}: Checking voltage in time range [{stim_start:.6f}, {stim_end:.6f}] s")
     
     # Extract voltage during stimulus period
     stim_mask = (time >= stim_start) & (time <= stim_end)
@@ -658,14 +660,18 @@ def detect_right_angle_in_voltage(voltage, time, stim_start, stim_end, sampling_
     #    Normal AP and typical variations: d²V/dt² up to ~2 billion mV/s²
     #    True right-angle artifacts: 20+ billion mV/s²
     second_deriv_threshold = SECOND_DERIV_THRESHOLD
-    
-    # Check for artifacts
-    max_d2v = np.max(np.abs(d2v_dt2))
-    
+
+    # Mask out samples at AP-peak voltages — sharp corners there are biology
+    # (Na+ inactivation collapsing dV/dt at the spike peak), not artifacts.
+    sub_threshold_mask = v_stim <= ARTIFACT_DETECTION_VOLTAGE_CUTOFF_MV
+    if not np.any(sub_threshold_mask):
+        return False, None
+    max_d2v = np.max(np.abs(d2v_dt2[sub_threshold_mask]))
+
     # Detect sharp corner artifact
     if max_d2v > second_deriv_threshold:
         return True, f"Sharp corner detected (d²V/dt²={max_d2v:.0f} mV/s²)"
-    
+
     return False, None
 
 
@@ -748,7 +754,7 @@ def sweep_config_to_json(bundle_dir, df_stim, manifest, df_voltage=None):
     valid_count = 0
     
     # Process each sweep
-    if VERBOSE: print(f"\nAnalyzing {len(all_sweeps)} sweeps...")
+    print(f"\nAnalyzing {len(all_sweeps)} sweeps...")
     for sweep_id in all_sweeps:
         # Get data for this sweep
         df_sweep_stim = df_stim[df_stim['sweep'] == sweep_id].copy()
@@ -787,7 +793,7 @@ def sweep_config_to_json(bundle_dir, df_stim, manifest, df_voltage=None):
     sweep_config["rejected_sweeps"] = len(all_sweeps) - valid_count
     
     # Check for lost current levels due to voltage artifacts
-    if VERBOSE: print("\n[Checking for lost current levels due to voltage artifacts...]")
+    print("\n[Checking for lost current levels due to voltage artifacts...]")
     voltage_artifact_sweeps = []
     for sweep_id, sweep_data in sweep_config["sweeps"].items():
         if not sweep_data["valid"] and "voltage artifact" in sweep_data.get("reason", "").lower():
@@ -1112,46 +1118,48 @@ def classify_bundle_sweeps_abf(bundle_dir, plot_sweeps=True):
         print(f"\n--- Step 3: Generating sweeps overlay ---")
         
         # Create overview plot with all sweeps (grid view, saved to bundle root)
+        # Layout: all current plots first (top section), then all voltage plots (bottom section)
         n_sweeps = len(all_sweeps)
         n_cols = min(4, n_sweeps)
         n_rows = (n_sweeps + n_cols - 1) // n_cols
-        
+
         fig, axes = plt.subplots(n_rows * 2, n_cols, figsize=(4 * n_cols, 3 * n_rows * 2))
         axes = np.atleast_2d(axes)
-        
+
         for idx, sweep_id in enumerate(all_sweeps):
-            row = (idx // n_cols) * 2
+            row = idx // n_cols
             col = idx % n_cols
-            
+
             # Get data for this sweep
             df_sweep_mv = df_mv[df_mv['sweep'] == sweep_id]
             df_sweep_pa = df_pa[df_pa['sweep'] == sweep_id]
-            
-            # Plot voltage (top)
-            ax_v = axes[row, col] if n_rows > 1 or n_cols > 1 else axes[0]
+
+            # Plot current (top section)
+            ax_i = axes[row, col] if n_rows > 1 or n_cols > 1 else axes[0]
+            ax_i.plot(df_sweep_pa["t_s"], df_sweep_pa["value"], 'k-', linewidth=0.5)
+            ax_i.axvline(best_stim_start, color='g', linestyle='--', alpha=0.7)
+            ax_i.axvline(best_stim_end, color='r', linestyle='--', alpha=0.7)
+            ax_i.set_ylabel("pA")
+            ax_i.set_title(f"Sweep {sweep_id}", fontsize=9)
+            ax_i.tick_params(labelsize=7)
+
+            # Plot voltage (bottom section)
+            ax_v = axes[n_rows + row, col] if n_rows > 1 or n_cols > 1 else axes[1]
             ax_v.plot(df_sweep_mv["t_s"], df_sweep_mv["value"], 'b-', linewidth=0.5)
             ax_v.axvline(best_stim_start, color='g', linestyle='--', alpha=0.7, label='Stim Start')
             ax_v.axvline(best_stim_end, color='r', linestyle='--', alpha=0.7, label='Stim End')
             ax_v.set_ylabel("mV")
             ax_v.set_title(f"Sweep {sweep_id}", fontsize=9)
+            ax_v.set_xlabel("Time (s)", fontsize=7)
             ax_v.tick_params(labelsize=7)
-            
-            # Plot current (bottom)
-            ax_i = axes[row + 1, col] if n_rows > 1 or n_cols > 1 else axes[1]
-            ax_i.plot(df_sweep_pa["t_s"], df_sweep_pa["value"], 'k-', linewidth=0.5)
-            ax_i.axvline(best_stim_start, color='g', linestyle='--', alpha=0.7)
-            ax_i.axvline(best_stim_end, color='r', linestyle='--', alpha=0.7)
-            ax_i.set_ylabel("pA")
-            ax_i.set_xlabel("Time (s)", fontsize=7)
-            ax_i.tick_params(labelsize=7)
-        
-        # Hide unused subplots
+
+        # Hide unused subplots in both sections
         for idx in range(n_sweeps, n_cols * n_rows):
-            row = (idx // n_cols) * 2
+            row = idx // n_cols
             col = idx % n_cols
             if row < axes.shape[0] and col < axes.shape[1]:
                 axes[row, col].axis('off')
-                axes[row + 1, col].axis('off')
+                axes[n_rows + row, col].axis('off')
         
         plt.suptitle(f"All Sweeps Overview: {p.name}\nGreen=Stim Start, Red=Stim End", fontsize=11)
         plt.tight_layout()
@@ -1219,7 +1227,7 @@ def classify_bundle_sweeps_nwb(bundle_dir):
     if config_path.exists():
         print(f"\n⚠ sweep_config.json already exists in {p.name}")
         # Auto-yes overwrite
-        if VERBOSE: print("Auto-overwriting existing sweep_config.json...")
+        print("Auto-overwriting existing sweep_config.json...")
     
     print(f"\n{'='*70}")
     print(f"ANALYZING BUNDLE: {p.name}")
@@ -1234,7 +1242,7 @@ def classify_bundle_sweeps_nwb(bundle_dir):
         manifest = json.load(f)
     
     # Load parquet files
-    if VERBOSE: print("\nLoading data files...")
+    print("\nLoading data files...")
     
     # Check if this is a mixed protocol file
     # Mixed protocol files have both "stimulus" and "response" tables
@@ -1242,19 +1250,19 @@ def classify_bundle_sweeps_nwb(bundle_dir):
     
     if is_mixed_protocol:
         # For mixed protocol, use stimulus table to determine valid sweeps
-        if VERBOSE: print("  Detected mixed protocol - using stimulus table for classification")
+        print("  Detected mixed protocol - using stimulus table for classification")
         stim_path = p / manifest["tables"]["stimulus"]
         df_analysis = pd.read_parquet(stim_path)
     else:
         # For single protocol, use pa table (original behavior)
-        if VERBOSE: print("  Detected single protocol - using pA table for classification")
+        print("  Detected single protocol - using pA table for classification")
         pa_path = p / manifest["tables"]["pa"]
         df_analysis = pd.read_parquet(pa_path)
     
     print(f"✓ Loaded {len(df_analysis)} stimulus samples across {df_analysis['sweep'].nunique()} sweeps")
     
     # Load voltage data for artifact detection
-    if VERBOSE: print("  Loading voltage data for artifact detection...")
+    print("  Loading voltage data for artifact detection...")
     if is_mixed_protocol:
         mv_path = p / manifest["tables"]["response"]
     else:
@@ -1263,7 +1271,7 @@ def classify_bundle_sweeps_nwb(bundle_dir):
     print(f"✓ Loaded {len(df_voltage)} voltage samples")
     
     # Generate sweep config
-    if VERBOSE: print("\nClassifying sweeps and calculating analysis windows...")
+    print("\nClassifying sweeps and calculating analysis windows...")
     sweep_config = sweep_config_to_json(bundle_dir, df_analysis, manifest, df_voltage=df_voltage)
     
     # Create sweeps_overlay.jpeg - overlay all sweeps with response on top, stimulus on bottom
@@ -1361,19 +1369,18 @@ def classify_bundle_sweeps_nwb(bundle_dir):
     print(f"Rejected Sweeps: {sweep_config['rejected_sweeps']}")
     
     # Show details for first few valid sweeps
-    if VERBOSE:
-        print(f"\nFirst 3 valid sweeps:")
-        count = 0
-        for sweep_id_str, sweep_info in sweep_config["sweeps"].items():
-            if sweep_info["valid"] and count < 3:
-                sweep_id = int(sweep_id_str)
-                windows = sweep_info["windows"]
-                stim_level = sweep_info["stimulus_level_pA"]
-                print(f"\n  Sweep {sweep_id}:")
-                print(f"    Stimulus level: {stim_level:.1f} pA")
-                print(f"    Stimulus window: [{windows['stimulus_start_s']:.3f}, {windows['stimulus_end_s']:.3f}] s")
-                print(f"    Baseline window: [{windows['baseline_start_s']:.3f}, {windows['baseline_end_s']:.3f}] s")
-                count += 1
+    print(f"\nFirst 3 valid sweeps:")
+    count = 0
+    for sweep_id_str, sweep_info in sweep_config["sweeps"].items():
+        if sweep_info["valid"] and count < 3:
+            sweep_id = int(sweep_id_str)
+            windows = sweep_info["windows"]
+            stim_level = sweep_info["stimulus_level_pA"]
+            print(f"\n  Sweep {sweep_id}:")
+            print(f"    Stimulus level: {stim_level:.1f} pA")
+            print(f"    Stimulus window: [{windows['stimulus_start_s']:.3f}, {windows['stimulus_end_s']:.3f}] s")
+            print(f"    Baseline window: [{windows['baseline_start_s']:.3f}, {windows['baseline_end_s']:.3f}] s")
+            count += 1
     
     print("\n" + "="*70)
     print("✓ Bundle processing complete. Ready for analysis.")
@@ -1390,7 +1397,7 @@ def classify_bundle_sweeps_nwb(bundle_dir):
         print(f"    - Stimulus protocol")
         
         # Auto-skip diagnostics (info already printed during classification)
-        if VERBOSE: print(f"\n  (Detailed diagnostics available in sweep_config.json)")
+        print(f"\n  (Detailed diagnostics available in sweep_config.json)")
     
     # Clean up matplotlib to prevent hanging
     plt.close('all')
@@ -1799,8 +1806,7 @@ def visualize_sweeps_from_parquet(bundle_dir, kept_sweeps, dropped_sweeps):
         print(f"  ✓ Saved: {dropped_pa_path}")
         plot_paths.append(dropped_pa_path)
     else:
-        if VERBOSE:
-            print(f"  ℹ No dropped sweeps to visualize")
+        print(f"  ℹ No dropped sweeps to visualize")
 
         # Remove stale dropped-sweep images from prior runs so summaries stay consistent
         for stale_name in ("dropped_sweeps_voltage.jpeg", "dropped_sweeps_current.jpeg"):
@@ -1808,11 +1814,9 @@ def visualize_sweeps_from_parquet(bundle_dir, kept_sweeps, dropped_sweeps):
             if stale_path.exists():
                 try:
                     stale_path.unlink()
-                    if VERBOSE:
-                        print(f"  ✓ Removed stale file: {stale_path.name}")
+                    print(f"  ✓ Removed stale file: {stale_path.name}")
                 except OSError:
-                    if VERBOSE:
-                        print(f"  ⚠ Could not remove stale file: {stale_path.name}")
+                    print(f"  ⚠ Could not remove stale file: {stale_path.name}")
     
     # Combine all plots into a single PDF
     pdf_path = p / "all_plots_summary.pdf"
@@ -2021,27 +2025,40 @@ def visualize_mixed_protocol_sweeps(bundle_dir, kept_sweeps, dropped_sweeps):
             
             if sweep_id in all_sweeps:
                 sweep_data = df_stim[df_stim['sweep'] == sweep_id]
-                
+
                 if len(sweep_data) > 0:
                     time = sweep_data['t_s'].values
                     time_rel = time - time[0]
                     stim_value = sweep_data['value'].values
-                    
+
+                    # Detect clamp mode from unit. Stimulus is a voltage command (mV)
+                    # under voltage clamp, current command (pA) under current clamp.
+                    unit_raw = str(sweep_data['unit'].iloc[0]).lower()
+                    if 'amp' in unit_raw:
+                        ylabel = "Stimulus (pA)"
+                        clamp_tag = ""
+                    elif 'volt' in unit_raw:
+                        ylabel = "Stimulus (mV)"
+                        clamp_tag = " [VC]"
+                    else:
+                        ylabel = f"Stimulus ({unit_raw})"
+                        clamp_tag = f" [{unit_raw}]"
+
                     ax.plot(time_rel, stim_value, linewidth=1.5, color='coral')
-                    
-                    ax.set_title(f"Sweep {sweep_id}", fontsize=10, fontweight='bold')
+
+                    ax.set_title(f"Sweep {sweep_id}{clamp_tag}", fontsize=10, fontweight='bold')
                     ax.set_xlabel("Time (s)", fontsize=9)
-                    ax.set_ylabel("Stimulus", fontsize=9)
+                    ax.set_ylabel(ylabel, fontsize=9)
                     ax.grid(True, alpha=0.3)
                     ax.tick_params(labelsize=8)
-        
+
         # Hide unused subplots
         for idx in range(len(dropped_sweeps), nrows * ncols):
             row = idx // ncols
             col = idx % ncols
             axes[row, col].set_visible(False)
-        
-        fig.suptitle(f"DROPPED Sweeps - Stimulus ({len(dropped_sweeps)} sweeps)", 
+
+        fig.suptitle(f"DROPPED Sweeps - Stimulus ({len(dropped_sweeps)} sweeps) — [VC] = voltage clamp (stimulus in mV)",
                      fontsize=14, fontweight='bold', y=0.995, color='red')
         plt.tight_layout()
         dropped_stim_path = p / "dropped_sweeps_stimulus.jpeg"
@@ -2064,31 +2081,44 @@ def visualize_mixed_protocol_sweeps(bundle_dir, kept_sweeps, dropped_sweeps):
             row = idx // ncols
             col = idx % ncols
             ax = axes[row, col]
-            
+
             if sweep_id in all_sweeps:
                 sweep_data = df_resp[df_resp['sweep'] == sweep_id]
-                sweep_data = sweep_data[sweep_data['unit'].str.lower().str.contains('volt', na=False)]
-                
+
                 if len(sweep_data) > 0:
                     time = sweep_data['t_s'].values
                     time_rel = time - time[0]
                     response = sweep_data['value'].values
-                    
+
+                    # Detect clamp mode from unit. Values are already in display units
+                    # (mV for current-clamp, pA for voltage-clamp); only the axis label
+                    # and title tag need to differ.
+                    unit_raw = str(sweep_data['unit'].iloc[0]).lower()
+                    if 'volt' in unit_raw:
+                        ylabel = "Response (mV)"
+                        clamp_tag = ""
+                    elif 'amp' in unit_raw:
+                        ylabel = "Response (pA)"
+                        clamp_tag = " [VC]"
+                    else:
+                        ylabel = f"Response ({unit_raw})"
+                        clamp_tag = f" [{unit_raw}]"
+
                     ax.plot(time_rel, response, linewidth=1.5, color='salmon')
-                    
-                    ax.set_title(f"Sweep {sweep_id}", fontsize=10, fontweight='bold')
+
+                    ax.set_title(f"Sweep {sweep_id}{clamp_tag}", fontsize=10, fontweight='bold')
                     ax.set_xlabel("Time (s)", fontsize=9)
-                    ax.set_ylabel("Response", fontsize=9)
+                    ax.set_ylabel(ylabel, fontsize=9)
                     ax.grid(True, alpha=0.3)
                     ax.tick_params(labelsize=8)
-        
+
         # Hide unused subplots
         for idx in range(len(dropped_sweeps), nrows * ncols):
             row = idx // ncols
             col = idx % ncols
             axes[row, col].set_visible(False)
-        
-        fig.suptitle(f"DROPPED Sweeps - Response ({len(dropped_sweeps)} sweeps)", 
+
+        fig.suptitle(f"DROPPED Sweeps - Response ({len(dropped_sweeps)} sweeps) — [VC] = voltage clamp (response in pA)",
                      fontsize=14, fontweight='bold', y=0.995, color='red')
         plt.tight_layout()
         dropped_resp_path = p / "dropped_sweeps_response.jpeg"
@@ -2097,8 +2127,7 @@ def visualize_mixed_protocol_sweeps(bundle_dir, kept_sweeps, dropped_sweeps):
         print(f"  ✓ Saved: {dropped_resp_path}")
         plot_paths.append(dropped_resp_path)
     else:
-        if VERBOSE:
-            print(f"  ℹ No dropped sweeps to visualize")
+        print(f"  ℹ No dropped sweeps to visualize")
 
         # Remove stale dropped-sweep images from prior runs so summaries stay consistent
         for stale_name in ("dropped_sweeps_stimulus.jpeg", "dropped_sweeps_response.jpeg"):
@@ -2106,11 +2135,9 @@ def visualize_mixed_protocol_sweeps(bundle_dir, kept_sweeps, dropped_sweeps):
             if stale_path.exists():
                 try:
                     stale_path.unlink()
-                    if VERBOSE:
-                        print(f"  ✓ Removed stale file: {stale_path.name}")
+                    print(f"  ✓ Removed stale file: {stale_path.name}")
                 except OSError:
-                    if VERBOSE:
-                        print(f"  ⚠ Could not remove stale file: {stale_path.name}")
+                    print(f"  ⚠ Could not remove stale file: {stale_path.name}")
     
     # Combine all plots into a single PDF
     pdf_path = p / "all_plots_summary.pdf"
@@ -2122,7 +2149,6 @@ def visualize_mixed_protocol_sweeps(bundle_dir, kept_sweeps, dropped_sweeps):
 
 
 if __name__ == "__main__":
-    if VERBOSE:
-        print("sweep_classifier.py - Sweep classification utilities")
-        print("\nThis module is used by bundle_analyzer.py")
-        print("Run: python bundle_analyzer.py /path/to/bundle_dir")
+    print("sweep_classifier.py - Sweep classification utilities")
+    print("\nThis module is used by bundle_analyzer.py")
+    print("Run: python bundle_analyzer.py /path/to/bundle_dir")

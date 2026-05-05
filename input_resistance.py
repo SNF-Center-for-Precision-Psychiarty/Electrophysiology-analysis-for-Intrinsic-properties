@@ -16,22 +16,18 @@ from analysis_config import (
     PEAK_PROMINENCE,
 )
 
-# Set to True to enable verbose/debug output in terminal
-VERBOSE = False
-
-def get_input_resistance(df, df_pA, bundle_path, sweep_config=None, skip_plots=False):
+def get_input_resistance(df, df_pA, bundle_path, sweep_config=None):
 
     # Calculate input resistance
-    if VERBOSE:
-        print("CALCULATING INPUT RESISTANCE")
-        print("NOTE: Input resistance is calculated during the stimulus period")
-        print("      using sweeps with no action potentials (low current sweeps)")
+    print("CALCULATING INPUT RESISTANCE")
+    print("NOTE: Input resistance is calculated during the stimulus period")
+    print("      using sweeps with no action potentials (low current sweeps)")
     bundle_path = Path(bundle_path)
     
     # Load manifest to detect protocol type
     man = json.loads((Path(bundle_path) / "manifest.json").read_text())
     is_mixed = "stimulus" in man.get("tables", {}) and "response" in man.get("tables", {})
-    if VERBOSE: print(f"Protocol type: {'MIXED' if is_mixed else 'SINGLE'}")
+    print(f"Protocol type: {'MIXED' if is_mixed else 'SINGLE'}")
     
     # For input resistance, use JUST the stimulus window (no pre/post expansion)
     # Get the raw stimulus window from sweep_config
@@ -55,7 +51,7 @@ def get_input_resistance(df, df_pA, bundle_path, sweep_config=None, skip_plots=F
         if t_stim_min is None or t_stim_max is None:
             raise ValueError("Could not find stimulus window in sweep_config")
             
-        if VERBOSE: print(f"Using stimulus window: [{t_stim_min:.6f}, {t_stim_max:.6f}] s")
+        print(f"Using stimulus window: [{t_stim_min:.6f}, {t_stim_max:.6f}] s")
     except (KeyError, TypeError) as e:
         raise ValueError(f"Failed to extract stimulus window from sweep_config: {e}")
     
@@ -71,17 +67,17 @@ def get_input_resistance(df, df_pA, bundle_path, sweep_config=None, skip_plots=F
         df_spikes_all = df[(df["t_s"]>=t_stim_min) & (df["t_s"]<=t_stim_max)]
         df_pA_all = df_pA[(df_pA["t_s"]>=t_stim_min) & (df_pA["t_s"]<=t_stim_max)]
     
-    if VERBOSE:
-        print(f"  mV data: {len(df_spikes_all)} rows, sweeps: {df_spikes_all['sweep'].unique()[:5]}...")
-        print(f"  pA data: {len(df_pA_all)} rows, sweeps: {df_pA_all['sweep'].unique()[:5]}...")
+    
+    print(f"  mV data: {len(df_spikes_all)} rows, sweeps: {df_spikes_all['sweep'].unique()[:5]}...")
+    print(f"  pA data: {len(df_pA_all)} rows, sweeps: {df_pA_all['sweep'].unique()[:5]}...")
     
     # Load analysis results to identify which sweeps have no spikes
     # This is more reliable than re-detecting peaks
     df_analysis = pd.read_parquet(bundle_path / "analysis.parquet")
     no_spike_sweeps = set(df_analysis[df_analysis['spike_frequency_Hz'] == 0]['sweep'].tolist())
-    if VERBOSE:
-        print(f"  Sweeps with NO spikes (from analysis): {len(no_spike_sweeps)} sweeps")
-        print(f"  NOTE: Only using first 8 sweeps for input resistance calculation")
+    
+    print(f"  Sweeps with NO spikes (from analysis): {len(no_spike_sweeps)} sweeps")
+    print(f"  NOTE: Only using first 8 sweeps for input resistance calculation")
     
     # If mV data has multiple channels (can happen after hardware malfunction fix),
     # filter to keep only one channel (the one we selected as correct)
@@ -90,7 +86,7 @@ def get_input_resistance(df, df_pA, bundle_path, sweep_config=None, skip_plots=F
         if len(channels) > 1:
             # Use only the first channel (or the most common one)
             primary_channel = df_spikes_all["channel_index"].value_counts().idxmax()
-            if VERBOSE: print(f"  Note: Multiple mV channels detected. Using channel {primary_channel}")
+            print(f"  Note: Multiple mV channels detected. Using channel {primary_channel}")
             df_spikes_all = df_spikes_all[df_spikes_all["channel_index"] == primary_channel]
 
     current_avg_vals = []
@@ -170,7 +166,7 @@ def get_input_resistance(df, df_pA, bundle_path, sweep_config=None, skip_plots=F
             voltage_avg_vals.append(voltage_avg)
             valid_sweeps_found += 1
             sweeps_used_count += 1
-            if VERBOSE: print(f"  Sweep {sweep_number}: I={current_avg:.2f} pA, V={voltage_avg:.4f} mV")
+            print(f"  Sweep {sweep_number}: I={current_avg:.2f} pA, V={voltage_avg:.4f} mV")
     
     print(f"  Found {valid_sweeps_found} sweeps with no spikes for I-V curve")
 
@@ -189,27 +185,26 @@ def get_input_resistance(df, df_pA, bundle_path, sweep_config=None, skip_plots=F
         print(f"Rin = {rin_mohm:.2f} MΩ (R² = {r_value**2:.3f})")
 
         # Plot I-V curve with best fit 
-        if not skip_plots:
-            plot_dir = bundle_path / "Input_Resistance"
-            plot_dir.mkdir(parents=True, exist_ok=True)
-            plt.figure(figsize=(6, 4))
-            plt.scatter(current_avg_vals, voltage_avg_vals, s=8, alpha=0.6, label="Data")
+        plot_dir = bundle_path / "Input_Resistance"
+        plot_dir.mkdir(parents=True, exist_ok=True)
+        plt.figure(figsize=(6, 4))
+        plt.scatter(current_avg_vals, voltage_avg_vals, s=8, alpha=0.6, label="Data")
 
-            # Best-fit line
-            fit_line = intercept + (slope * current_avg_vals)
-            plt.plot(current_avg_vals, fit_line, 'r', label=f'Fit: V = {slope:.2f}*I + {intercept:.2f}')
+        # Best-fit line
+        fit_line = intercept + (slope * current_avg_vals)
+        plt.plot(current_avg_vals, fit_line, 'r', label=f'Fit: V = {slope:.2f}*I + {intercept:.2f}')
 
-            plt.xlabel("Current (pA)")
-            plt.ylabel("Voltage (mV)")
-            plt.title(f"I-V curve: First 8 Sweeps")
-            plt.grid(True)
-            plt.legend()
-            plt.tight_layout()
-            #plt.show()
-            plt.savefig(plot_dir / 'InputResistance.jpeg')
-            plt.close()
+        plt.xlabel("Current (pA)")
+        plt.ylabel("Voltage (mV)")
+        plt.title(f"I-V curve: First 8 Sweeps")
+        plt.grid(True)
+        plt.legend()
+        plt.tight_layout()
+        #plt.show()
+        plt.savefig(plot_dir / 'InputResistance.jpeg')
+        plt.close()
 
-        if VERBOSE: print("AVERAGED MΩ:",rin_mohm)
+        print("AVERAGED MΩ:",rin_mohm)
 
     # Update manifest
     # Path to your manifest file

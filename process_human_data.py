@@ -11,9 +11,6 @@ import re
 from openpyxl import load_workbook
 from pathlib import Path
 
-# Set to True to enable verbose/debug output in terminal
-VERBOSE = False
-
 # -------------------------------------------------------------
 # Checkpoint function
 # -------------------------------------------------------------
@@ -28,10 +25,9 @@ def checkpoint(milestone_name: str) -> bool:
     Returns:
         True (always proceeds)
     """
-    if VERBOSE:
-        print("\n" + "="*70)
-        print(f"✓ {milestone_name} was successful!")
-        print("="*70)
+    print("\n" + "="*70)
+    print(f"✓ {milestone_name} was successful!")
+    print("="*70)
     return True
 
 
@@ -202,9 +198,8 @@ def extract_current_voltage_from_nwb(nwb, out_dir, cellNum, plot=False):
     current_traces = list(nwb.stimulus.keys()) if nwb.stimulus else []
     current_traces = sorted(current_traces, key=sweep_sort_key)
 
-    if VERBOSE:
-        print("Voltage traces:", voltage_traces)
-        print("Current traces:", current_traces)
+    print("Voltage traces:", voltage_traces)
+    print("Current traces:", current_traces)
 
     voltage_rows = []
     current_rows = []

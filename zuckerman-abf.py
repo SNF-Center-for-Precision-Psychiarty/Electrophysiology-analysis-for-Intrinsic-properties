@@ -9,8 +9,6 @@ from typing import Tuple, Dict
 import numpy as np
 from run_analysis import run_for_bundle
 
-VERBOSE = False
-
 def parse_abf_filename(fname: str):
     """
     Parse ABF filename like 2025_06_10_0003.abf
@@ -201,8 +199,7 @@ def process_mouse_folder(
                 continue
 
             key = (recDate, fileNum)
-            if VERBOSE:
-                print("KEY",key)
+
             if key not in meta_map:
                 print(f"[MISS] No Excel metadata for {file_id} (recDate={recDate}, fileNum={fileNum})")
                 continue
@@ -212,8 +209,6 @@ def process_mouse_folder(
             df_mV, df_pA, abf_meta = build_long_tables_from_abf(abf_path)
 
             meta_full.update(abf_meta)
-            if VERBOSE:
-                print("updated", meta_full)
 
             if df_mV.empty and df_pA.empty:
                 print(f"[SKIP] No mV/pA data found in {abf_path}")
@@ -269,8 +264,7 @@ if __name__ == "__main__":
     for bundle in bundle_dirs:
         # if bundle.name == "2025_10_01_0008_525":
         manifest_path = bundle / "manifest.json"
-        if VERBOSE:
-            print(manifest_path)
+        print(manifest_path)
         # Skip directories that don't have a manifest.json (e.g., Data/ folders, other non-bundle dirs)
         if not manifest_path.exists():
             print(f"Skipping {bundle.name} (no manifest.json found)")

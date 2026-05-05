@@ -21,16 +21,16 @@ from pathlib import Path
 KINK_DETECTION_PROMINENCE_PERCENT = 0.1   # 10% of max dV/dt
 KINK_DETECTION_MIN_DISTANCE_SAMPLES = 5   # Increase separation
 KINK_DETECTION_MIN_PROMINENCE_FOR_LOCAL_MAXIMA = 0.10  # 10% of max dV/dt - suppress tiny local wiggles
-KINK_MIN_SELECTED_PROMINENCE_RATIO = 0.14 # Stage-1 selected prominence ratio requirement
-KINK_RATIO_THRESHOLD = 0.45               # Stage-1 kink/main ratio requirement
-KINK_MIN_POST_DIP_RATIO = 0.14            # Stage-1 post-kink dip requirement
-KINK_MIN_INTERVAL_MS = 0.6                # Kink must precede max upstroke by at least 0.6 ms
+KINK_MIN_SELECTED_PROMINENCE_RATIO = 0.12 # Stage-1 selected prominence ratio requirement
+KINK_RATIO_THRESHOLD = 0.30               # Stage-1 kink/main ratio requirement
+KINK_MIN_POST_DIP_RATIO = 0.12            # Stage-1 post-kink dip requirement
+KINK_MIN_INTERVAL_MS = 0.15               # Kink must precede max upstroke by at least 0.15 ms
 KINK_ENABLE_STAGE2 = False                # Disable relaxed fallback stage; keep strict Stage-1 only
 KINK_STAGE2_RATIO_RELAX = 0.03            # Stage-2 relaxed ratio amount (tighter fallback)
 KINK_STAGE2_PROMINENCE_RELAX = 0.04       # Stage-2 relaxed selected-prominence amount
 KINK_STAGE2_DIP_RELAX = 0.03              # Stage-2 relaxed post-dip amount
 KINK_TIEBREAK_MIN_MARGIN_RATIO = 0.05     # If top two candidates are closer than this, use tie-break rules
-KINK_ANTI_WIGGLE_MIN_WIDTH_MS = 0.30      # Reject ultra-narrow wiggle-like candidates
+KINK_ANTI_WIGGLE_MIN_WIDTH_MS = 0.02      # Reject only extremely narrow wiggle-like candidates
 KINK_ANTI_WIGGLE_MIN_PROMINENCE_RATIO = 0.10  # Reject weak local wiggles
 KINK_ANTI_WIGGLE_MAX_SIGN_CHANGES = 6     # Reject highly oscillatory post-candidate segments
 

@@ -18,8 +18,6 @@ import json
 import gc
 from typing import Tuple, Dict, Any
 
-# Set to True to enable verbose/debug output in terminal
-VERBOSE = False
 
 def detect_nwb_protocol_type(nwb_file: str) -> Tuple[str, Dict[str, Any]]:
     """
@@ -560,13 +558,12 @@ For each bundle, this will:
     print("\nAnalysis options:")
     print("  1) Run full analysis with plots (default)")
     print("  2) Only create sweep_config.json (skip spike detection)")
-    print("  3) Run full analysis WITHOUT plots (faster)")
     
     while True:
-        analysis_choice = input("Enter 1, 2, or 3: ").strip()
-        if analysis_choice in ["1", "2", "3"]:
+        analysis_choice = input("Enter 1 or 2: ").strip()
+        if analysis_choice in ["1", "2"]:
             break
-        print("  ✗ Invalid input. Please enter 1, 2, or 3.")
+        print("  ✗ Invalid input. Please enter 1 or 2.")
     
     # Ask about resuming from a specific bundle
     start_idx = 0
@@ -600,8 +597,6 @@ For each bundle, this will:
             
             if analysis_choice == "2":
                 argv.append("--skip-analysis")
-            elif analysis_choice == "3":
-                argv.append("--skip-plots")
 
             if no_checkpoints:
                 argv.append("--no-checkpoints")

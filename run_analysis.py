@@ -14,25 +14,17 @@ from matplotlib.backends.backend_pdf import PdfPages
 import sys
 import subprocess
 
-# Set to True to enable verbose/debug output in terminal
-VERBOSE = False
-
-
-def visualize_filter_all_sweeps(bundle_dir: str, skip_plots: bool = False, max_sweeps: int = 4, cutoff_hz: Optional[int] = None, sampling_rate: Optional[float] = None):
+def visualize_filter_all_sweeps(bundle_dir: str, max_sweeps: int = 4, cutoff_hz: Optional[int] = None, sampling_rate: Optional[float] = None):
     """
     Create before/after filter visualizations for all (or selected) sweeps in a bundle.
     
     Args:
         bundle_dir: Path to bundle directory
-        skip_plots: If True, skip visualization (for faster processing)
         max_sweeps: Maximum number of sweeps to visualize (default 12 for good coverage)
                    Set to None to visualize all sweeps
         cutoff_hz: Cutoff frequency in Hz - REQUIRED parameter
         sampling_rate: Sampling rate in Hz - used as fallback if manifest has single rate
-    """
-    if skip_plots:
-        return
-    
+    """   
     try:
         bundle_path = Path(bundle_dir)
         
@@ -169,7 +161,7 @@ def fix_hardware_malfunction_mV(bundle_dir: str):
         if len(channels) != 2:
             return False
         
-        if VERBOSE: print(f"  Detected {len(channels)} mV channels. Identifying the correct one...")
+        print(f"  Detected {len(channels)} mV channels. Identifying the correct one...")
         
         # For each channel, calculate variance across sweeps
         # The correct channel should have consistent patterns (lower variance in peak detection)
@@ -193,14 +185,14 @@ def fix_hardware_malfunction_mV(bundle_dir: str):
                 "data_points": len(df_ch)
             }
             
-            if VERBOSE: print(f"    Channel {ch}: CV={avg_cv:.4f}, Mean Std={sweep_stats['std'].mean():.4f}, Points={len(df_ch)}")
+            print(f"    Channel {ch}: CV={avg_cv:.4f}, Mean Std={sweep_stats['std'].mean():.4f}, Points={len(df_ch)}")
         
         # Select channel with HIGHER CV (more variable = correct channel with real signal)
         # The nonsense channel will have near-zero CV (flat noise or constant value)
         # The correct channel will have natural signal variation (higher CV)
         correct_channel = max(channel_stats.keys(), key=lambda x: channel_stats[x]["avg_cv"])
         
-        if VERBOSE: print(f"  ✓ Selected Channel {correct_channel} as correct signal (highest CV)")
+        print(f"  ✓ Selected Channel {correct_channel} as correct signal (highest CV)")
         
         # Keep only correct channel
         df_mv_fixed = df_mv[df_mv["channel_index"] == correct_channel].copy()
@@ -319,12 +311,11 @@ def replace_current_data_with_reference(bundle_dir: str, reference_bundle_dir: s
     # If the faulty pA file has no sweeps (empty), we'll write the reference sweeps
     # into the target filename and use the reference sweep numbering.
     if len(target_sweeps) == 0:
-        if VERBOSE: print("  Note: Faulty pA contains no sweeps. Will write reference sweeps into target file.")
+        print("  Note: Faulty pA contains no sweeps. Will write reference sweeps into target file.")
         target_sweeps = list(ref_sweeps)
 
-    if VERBOSE:
-        print(f"  Target sweeps: {len(target_sweeps)} sweeps (e.g., {target_sweeps[:5]}...)")
-        print(f"  Reference sweeps: {len(ref_sweeps)} sweeps (e.g., {ref_sweeps[:5]}...)")
+    print(f"  Target sweeps: {len(target_sweeps)} sweeps (e.g., {target_sweeps[:5]}...)")
+    print(f"  Reference sweeps: {len(ref_sweeps)} sweeps (e.g., {ref_sweeps[:5]}...)")
 
     # Create mapping by position: map the first N reference sweeps to the first N target sweeps
     # If counts differ, map up to the smaller length and drop any unmapped reference rows.
@@ -346,22 +337,21 @@ def replace_current_data_with_reference(bundle_dir: str, reference_bundle_dir: s
     df_pa_ref_remapped = df_pa_ref_remapped.dropna(subset=["sweep"]).copy()
     after_rows = len(df_pa_ref_remapped)
     if after_rows < before_rows:
-        if VERBOSE: print(f"  Note: Dropped {before_rows - after_rows} reference rows that could not be mapped to target sweeps.")
+        print(f"  Note: Dropped {before_rows - after_rows} reference rows that could not be mapped to target sweeps.")
 
     # Ensure sweep is integer type
     df_pa_ref_remapped["sweep"] = df_pa_ref_remapped["sweep"].astype(int)
     # Preview summary and ask for confirmation before overwriting target file
-    if VERBOSE:
-        print("\n--- Preview replacement ---")
-        print(f"Target (will keep filename): {pa_table_name} -> {pa_path}")
-        print(f"Source (reference): {pa_ref_table_name} from {p_ref}")
-        print(f"Remapped rows: {len(df_pa_ref_remapped)} (from {len(df_pa_ref)} source rows)")
-        print(f"Target sweeps (post-map) sample: {sorted(df_pa_ref_remapped['sweep'].unique())[:8]}")
-        print("First 5 rows of remapped reference data:")
-        try:
-            print(df_pa_ref_remapped.head().to_string())
-        except Exception:
-            print(df_pa_ref_remapped.head())
+    print("\n--- Preview replacement ---")
+    print(f"Target (will keep filename): {pa_table_name} -> {pa_path}")
+    print(f"Source (reference): {pa_ref_table_name} from {p_ref}")
+    print(f"Remapped rows: {len(df_pa_ref_remapped)} (from {len(df_pa_ref)} source rows)")
+    print(f"Target sweeps (post-map) sample: {sorted(df_pa_ref_remapped['sweep'].unique())[:8]}")
+    print("First 5 rows of remapped reference data:")
+    try:
+        print(df_pa_ref_remapped.head().to_string())
+    except Exception:
+        print(df_pa_ref_remapped.head())
 
     # Apply baseline offset correction + per-sweep averaging + rounding to 5 pA increments
     try:
@@ -375,20 +365,20 @@ def replace_current_data_with_reference(bundle_dir: str, reference_bundle_dir: s
                         t_stim_start = sweep_data["windows"].get("stimulus_start_s", 0.1)
                         break
                 baseline_window = df_pa_ref_remapped[df_pa_ref_remapped['t_s'] < t_stim_start]
-                if VERBOSE: print(f"Using stimulus start time from sweep_config: {t_stim_start:.6f}s")
+                print(f"Using stimulus start time from sweep_config: {t_stim_start:.6f}s")
             except (KeyError, TypeError, StopIteration):
                 # Fallback to first 10% if sweep_config extraction fails
                 t_max = df_pa_ref_remapped['t_s'].max()
                 baseline_window = df_pa_ref_remapped[df_pa_ref_remapped['t_s'] < (t_max * 0.1)]
-                if VERBOSE: print(f"Using fallback: first 10% of recording (up to {t_max * 0.1:.6f}s)")
+                print(f"Using fallback: first 10% of recording (up to {t_max * 0.1:.6f}s)")
         else:
             # No sweep_config: use first 10% of recording as baseline
             t_max = df_pa_ref_remapped['t_s'].max()
             baseline_window = df_pa_ref_remapped[df_pa_ref_remapped['t_s'] < (t_max * 0.1)]
-            if VERBOSE: print(f"No sweep_config provided: using first 10% of recording (up to {t_max * 0.1:.6f}s) as baseline")
+            print(f"No sweep_config provided: using first 10% of recording (up to {t_max * 0.1:.6f}s) as baseline")
         
         baseline_offset = baseline_window['value'].mean() if len(baseline_window) > 0 else 0.0
-        if VERBOSE: print(f"\nBaseline offset (pre-stimulus quiet period): {baseline_offset:.2f} pA")
+        print(f"\nBaseline offset (pre-stimulus quiet period): {baseline_offset:.2f} pA")
 
         # Step 2: Subtract baseline offset from all values
         df_pa_ref_remapped['value'] = df_pa_ref_remapped['value'] - baseline_offset
@@ -407,13 +397,13 @@ def replace_current_data_with_reference(bundle_dir: str, reference_bundle_dir: s
                         break
                 if t_stim_start is not None and t_stim_end is not None:
                     df_window = df_pa_ref_remapped[(df_pa_ref_remapped['t_s'] >= t_stim_start) & (df_pa_ref_remapped['t_s'] <= t_stim_end)]
-                    if VERBOSE: print(f"Using stimulus window from sweep_config: [{t_stim_start:.6f}, {t_stim_end:.6f}]s")
+                    print(f"Using stimulus window from sweep_config: [{t_stim_start:.6f}, {t_stim_end:.6f}]s")
                 else:
                     raise KeyError("Could not extract stimulus window")
             except (KeyError, TypeError):
                 # Fallback to 0.1-0.75 if extraction fails
                 df_window = df_pa_ref_remapped[(df_pa_ref_remapped['t_s'] >= 0.1) & (df_pa_ref_remapped['t_s'] <= 0.75)]
-                if VERBOSE: print("Using fallback stimulus window: [0.1, 0.75]s")
+                print("Using fallback stimulus window: [0.1, 0.75]s")
         else:
             # No sweep_config: use middle 50% of recording
             t_min = df_pa_ref_remapped['t_s'].min()
@@ -421,7 +411,7 @@ def replace_current_data_with_reference(bundle_dir: str, reference_bundle_dir: s
             t_window_min = t_min + (t_max - t_min) * 0.2
             t_window_max = t_min + (t_max - t_min) * 0.7
             df_window = df_pa_ref_remapped[(df_pa_ref_remapped['t_s'] >= t_window_min) & (df_pa_ref_remapped['t_s'] <= t_window_max)]
-            if VERBOSE: print(f"No sweep_config: using middle 50% of recording [{t_window_min:.6f}, {t_window_max:.6f}]s")
+            print(f"No sweep_config: using middle 50% of recording [{t_window_min:.6f}, {t_window_max:.6f}]s")
         
         avg_pa = df_window.groupby('sweep')['value'].mean().reset_index(name='avg_injected_current_pA')
         # if some sweeps missing in window, fallback to full-sweep mean
@@ -438,14 +428,10 @@ def replace_current_data_with_reference(bundle_dir: str, reference_bundle_dir: s
             rounded_val = float(row['avg_injected_current_pA_rounded'])
             df_pa_ref_remapped.loc[df_pa_ref_remapped['sweep'] == sw, 'value'] = rounded_val
 
-        if VERBOSE:
-            print('\nApplied baseline correction + per-sweep mean and rounded to 5 pA increments (preview):')
-            print(avg_pa.head().to_string())
+        print('\nApplied baseline correction + per-sweep mean and rounded to 5 pA increments (preview):')
+        print(avg_pa.head().to_string())
     except Exception as _e:
         print(f"Warning: could not apply per-sweep rounding to remapped data: {_e}")
-
-    # Auto-yes replacement
-    if VERBOSE: print("Auto-proceeding with pA replacement...")
 
     # Save remapped reference data to the TARGET filename, replacing the faulty values
     df_pa_ref_remapped.to_parquet(pa_path, index=False)
@@ -460,7 +446,81 @@ from sweep_classifier import classify_bundle_sweeps_abf
 from sweep_classifier import visualize_sweeps_from_parquet
 
 
-def generate_summary_plot(bundle_dir: str):
+def get_plot_preferences(no_checkpoints: bool = False) -> dict:
+    """
+    Ask user which supplemental plots to include in the analysis.
+    
+    Returns:
+        dict: Plot preferences like {"kink_diagnostics": True, "sag_current": True, "savgol_plots": True}
+    """
+    
+    # Check if running in interactive mode
+    is_interactive = sys.stdin.isatty()
+    
+    if not is_interactive or no_checkpoints:
+        # Default: include all supplemental plots in non-interactive mode
+        print("\n[Auto] Including all supplemental plots (non-interactive mode)...")
+        return {
+            "kink_diagnostics": True,
+            "sag_current": True,
+            "savgol_plots": True
+        }
+    
+    # Interactive mode: ask user
+    print("\n" + "="*70)
+    print("📊 SELECT SUPPLEMENTAL PLOTS FOR ANALYSIS")
+    print("="*70)
+    print("\nOptional supplemental plots that can be included in the final summary:")
+    print("  1. Kink Diagnostics   - Detailed kink detection analysis per spike")
+    print("  2. Sag Current        - HCN channel characterization plots")
+    print("  3. SavGol Filter      - Savitzky-Golay filter analysis per sweep")
+    print("\nEnter the plot numbers you want (i.e., '1,2' or '1' or '1,2,3'):")
+    print("(Leave blank or press Enter for no supplemental plots): ")
+    
+    user_input = input().strip()
+    
+    # Default preferences (none included)
+    preferences = {
+        "kink_diagnostics": False,
+        "sag_current": False,
+        "savgol_plots": False
+    }
+
+    if user_input:
+        # Parse user input
+        try:
+            selected = set()
+            for item in user_input.split(','):
+                selected.add(int(item.strip()))
+            
+            # Set preferences based on selection
+            preferences["kink_diagnostics"] = 1 in selected
+            preferences["sag_current"] = 2 in selected
+            preferences["savgol_plots"] = 3 in selected
+            
+            # Print summary
+            print("\n✓ Plot selection confirmed:")
+            if preferences["kink_diagnostics"]:
+                print("  ✓ Kink Diagnostics")
+            if preferences["sag_current"]:
+                print("  ✓ Sag Current")
+            if preferences["savgol_plots"]:
+                print("  ✓ SavGol Filter")
+            if not any(preferences.values()):
+                print("  (No supplemental plots selected)")
+            print()
+            
+        except ValueError:
+            print("\n⚠ Invalid input. No supplemental plots will be included.")
+            print()
+    else:
+        print("\n✓ No supplemental plots selected (default).")
+        print()
+
+    return preferences
+
+
+def generate_summary_plot(bundle_dir: str, plot_preferences: dict = None):
     """
     Collect all JPEG plot files from a bundle directory and combine them
     into a single master summary image.
@@ -469,11 +529,25 @@ def generate_summary_plot(bundle_dir: str):
     - Sweep classification (sweeps_overlay.jpeg, all_sweeps_overview.jpeg)
     - AP_Per_Sweep/ (action potential per sweep)
     - Averaged_Peaks_Per_Sweep/ (averaged peaks)
-    - SavGol_Plots/ (Savitzky-Golay filter)
+    - SavGol_Plots/ (Savitzky-Golay filter) [optional]
     - InputResistance/ (input resistance analysis)
     - RMP distribution
-    - Kink diagnostics
+    - Kink diagnostics [optional]
+    - Sag current plots [optional]
+    
+    Args:
+        bundle_dir: Path to bundle directory
+        plot_preferences: Dict with keys 'kink_diagnostics', 'sag_current', 'savgol_plots' (boolean values)
+                         If None, defaults to including all optional plots.
     """
+    # Default preferences: include all optional plots if not specified
+    if plot_preferences is None:
+        plot_preferences = {
+            "kink_diagnostics": False,
+            "sag_current": False,
+            "savgol_plots": False
+        }
+    
     try:
         from PIL import Image
     except ImportError:
@@ -832,107 +906,122 @@ def generate_summary_plot(bundle_dir: str):
                 pdf.savefig(fig, dpi=150, bbox_inches='tight')
                 plt.close(fig)
         
-        # PAGE 7: Kink Diagnostics in grid format
-        kink_dir = p / "Kink_Diagnostics"
-        if kink_dir.exists():
-            kink_files = sorted(kink_dir.glob("*.jpeg"))
-            if kink_files:
-                n_plots = len(kink_files)
-                n_cols = 4
-                n_rows = (n_plots + n_cols - 1) // n_cols
-                
-                fig = plt.figure(figsize=(14, 3.5 * n_rows))
-                for idx, kink_file in enumerate(kink_files):
-                    ax = fig.add_subplot(n_rows, n_cols, idx + 1)
-                    img = Image.open(kink_file)
-                    ax.imshow(img)
-                    ax.axis('off')
-                    sweep_id = kink_file.stem.replace("sweep_", "").replace("_kinks", "")
-                    ax.set_title(f"{sweep_id}", fontsize=10, fontweight='bold')
-                    img.close()
-                
-                plt.tight_layout()
-                pdf.savefig(fig, dpi=150, bbox_inches='tight')
-                plt.close(fig)
+        # PAGE 7: Kink Diagnostics in grid format [OPTIONAL]
+        if plot_preferences.get("kink_diagnostics", True):
+            kink_dir = p / "Kink_Diagnostics"
+            if kink_dir.exists():
+                kink_files = sorted(kink_dir.glob("*.jpeg"))
+                if kink_files:
+                    n_plots = len(kink_files)
+                    n_cols = 4
+                    n_rows = (n_plots + n_cols - 1) // n_cols
+                    
+                    fig = plt.figure(figsize=(14, 3.5 * n_rows))
+                    for idx, kink_file in enumerate(kink_files):
+                        ax = fig.add_subplot(n_rows, n_cols, idx + 1)
+                        img = Image.open(kink_file)
+                        ax.imshow(img)
+                        ax.axis('off')
+                        sweep_id = kink_file.stem.replace("sweep_", "").replace("_kinks", "")
+                        ax.set_title(f"{sweep_id}", fontsize=10, fontweight='bold')
+                        img.close()
+                    
+                    plt.tight_layout()
+                    pdf.savefig(fig, dpi=150, bbox_inches='tight')
+                    plt.close(fig)
         
-        # PAGE 8: Sav_Gol_Plots_Per_Sweep in grid format and RMP plot
+        # PAGE 8: Sav_Gol_Plots_Per_Sweep in grid format and RMP plot [SavGol OPTIONAL]
+        savgol_include = plot_preferences.get("savgol_plots", True)
         savgol_dir = p / "Sav_Gol_Plots_Per_Sweep"
         rmp_plot = p / "RMP_Dist_Post_Filter.jpeg"
         
-        if savgol_dir.exists() or rmp_plot.exists():
-            savgol_files = sorted(savgol_dir.glob("SavGol_Sweep*.jpeg")) if savgol_dir.exists() else []
+        # Include RMP plot if SavGol is not selected (RMP is always included, just SavGol is optional)
+        savgol_files = sorted(savgol_dir.glob("SavGol_Sweep*.jpeg")) if (savgol_include and savgol_dir.exists()) else []
+        has_rmp = rmp_plot.exists()
+        
+        if savgol_files or has_rmp:
             n_savgol = len(savgol_files)
-            has_rmp = rmp_plot.exists()
             
             # Calculate grid: 4 columns for SavGol plots, plus RMP if exists
             n_cols = 4
-            n_savgol_rows = (n_savgol + n_cols - 1) // n_cols
+            n_savgol_rows = (n_savgol + n_cols - 1) // n_cols if n_savgol > 0 else 0
             n_total_rows = n_savgol_rows + (1 if has_rmp else 0)
             
-            fig = plt.figure(figsize=(14, 3.5 * n_total_rows))
-            
-            # Add SavGol plots
-            for idx, savgol_file in enumerate(savgol_files):
-                ax = fig.add_subplot(n_total_rows, n_cols, idx + 1)
-                img = Image.open(savgol_file)
-                ax.imshow(img)
-                ax.axis('off')
-                sweep_id = savgol_file.stem.replace("SavGol_Sweep", "").replace("_baseline", "")
-                ax.set_title(f"SavGol Sweep {sweep_id}", fontsize=10, fontweight='bold')
-                img.close()
-            
-            # Add RMP plot if exists
-            if has_rmp:
-                ax = fig.add_subplot(n_total_rows, n_cols, n_savgol + 1)
-                img = Image.open(rmp_plot)
-                ax.imshow(img)
-                ax.axis('off')
-                ax.set_title("RMP Distribution", fontsize=10, fontweight='bold')
-                img.close()
-            
-            plt.tight_layout()
-            pdf.savefig(fig, dpi=150, bbox_inches='tight')
-            plt.close(fig)
-        
-        # PAGE 9: Sag Current
-        sag_plot = p / "SagCurrent.jpeg"
-        if sag_plot.exists():
-            fig = plt.figure(figsize=(11, 8.5))
-            ax = fig.add_subplot(111)
-            img = Image.open(sag_plot)
-            ax.imshow(img)
-            ax.axis('off')
-            ax.set_title("Sag Current Analysis", fontsize=14, fontweight='bold', pad=10)
-            plt.tight_layout()
-            pdf.savefig(fig, dpi=150, bbox_inches='tight')
-            plt.close(fig)
-            img.close()
-        
-        # PAGE 10: Filter Visualizations (before/after filtering plots)
-        filter_vis_dir = p / "filter_visualizations"
-        if filter_vis_dir.exists():
-            filter_files = sorted(filter_vis_dir.glob("*.jpeg"))
-            if filter_files:
-                n_plots = len(filter_files)
-                n_cols = 2  # 2 columns for filter visualizations (typically larger plots)
-                n_rows = (n_plots + n_cols - 1) // n_cols
+            if n_total_rows > 0:
+                fig = plt.figure(figsize=(14, 3.5 * n_total_rows))
                 
-                fig = plt.figure(figsize=(14, 7 * n_rows))
-                for idx, filter_file in enumerate(filter_files):
-                    ax = fig.add_subplot(n_rows, n_cols, idx + 1)
-                    img = Image.open(filter_file)
+                # Add SavGol plots (if included)
+                for idx, savgol_file in enumerate(savgol_files):
+                    ax = fig.add_subplot(n_total_rows, n_cols, idx + 1)
+                    img = Image.open(savgol_file)
                     ax.imshow(img)
                     ax.axis('off')
-                    # Extract a readable title from filename
-                    title = filter_file.stem.replace('_before_after_', ' - ').replace('_', ' ').replace('spectrum', 'Spectrum').replace('Sweep', 'Sweep')
-                    ax.set_title(title, fontsize=10, fontweight='bold')
+                    sweep_id = savgol_file.stem.replace("SavGol_Sweep", "").replace("_baseline", "")
+                    ax.set_title(f"SavGol Sweep {sweep_id}", fontsize=10, fontweight='bold')
+                    img.close()
+                
+                # Add RMP plot if exists (always included regardless of SavGol preference)
+                if has_rmp:
+                    ax = fig.add_subplot(n_total_rows, n_cols, n_savgol + 1)
+                    img = Image.open(rmp_plot)
+                    ax.imshow(img)
+                    ax.axis('off')
+                    ax.set_title("RMP Distribution", fontsize=10, fontweight='bold')
                     img.close()
                 
                 plt.tight_layout()
                 pdf.savefig(fig, dpi=150, bbox_inches='tight')
                 plt.close(fig)
         
-        # PAGE 11: Input Resistance
+        # PAGE 9: Sag Current [OPTIONAL]
+        if plot_preferences.get("sag_current", True):
+            sag_dir = p / "SagCurrent"
+            sag_files = sorted(sag_dir.glob("SagCurrent_sweep*.jpeg")) if sag_dir.exists() else []
+            if sag_files:
+                n_plots = len(sag_files)
+                n_cols = min(4, n_plots)
+                n_rows = (n_plots + n_cols - 1) // n_cols
+
+                fig = plt.figure(figsize=(14, 3.5 * n_rows))
+                for idx, sag_file in enumerate(sag_files):
+                    ax = fig.add_subplot(n_rows, n_cols, idx + 1)
+                    img = Image.open(sag_file)
+                    ax.imshow(img)
+                    ax.axis('off')
+                    sweep_id = sag_file.stem.replace("SagCurrent_sweep", "")
+                    ax.set_title(f"Sag Current Sweep {sweep_id}", fontsize=10, fontweight='bold')
+                    img.close()
+
+                fig.suptitle("Sag Current Analysis", fontsize=14, fontweight='bold')
+                plt.tight_layout(rect=[0, 0, 1, 0.97])
+                pdf.savefig(fig, dpi=150, bbox_inches='tight')
+                plt.close(fig)
+        
+        # # PAGE 10: Filter Visualizations (before/after filtering plots)
+        # filter_vis_dir = p / "filter_visualizations"
+        # if filter_vis_dir.exists():
+        #     filter_files = sorted(filter_vis_dir.glob("*.jpeg"))
+        #     if filter_files:
+        #         n_plots = len(filter_files)
+        #         n_cols = 2  # 2 columns for filter visualizations (typically larger plots)
+        #         n_rows = (n_plots + n_cols - 1) // n_cols
+                
+        #         fig = plt.figure(figsize=(14, 7 * n_rows))
+        #         for idx, filter_file in enumerate(filter_files):
+        #             ax = fig.add_subplot(n_rows, n_cols, idx + 1)
+        #             img = Image.open(filter_file)
+        #             ax.imshow(img)
+        #             ax.axis('off')
+        #             # Extract a readable title from filename
+        #             title = filter_file.stem.replace('_before_after_', ' - ').replace('_', ' ').replace('spectrum', 'Spectrum').replace('Sweep', 'Sweep')
+        #             ax.set_title(title, fontsize=10, fontweight='bold')
+        #             img.close()
+                
+        #         plt.tight_layout()
+        #         pdf.savefig(fig, dpi=150, bbox_inches='tight')
+        #         plt.close(fig)
+        
+        # PAGE 10: Input Resistance
         ir_dir = p / "Input_Resistance"
         ir_plot = None
         if ir_dir.exists():
@@ -957,6 +1046,226 @@ def generate_summary_plot(bundle_dir: str):
             img.close()
     
     print(f"  ✓ Saved all plots summary: {pdf_path.name}")
+
+
+def prompt_and_generate_sweep_gifs(bundle_dir: str, no_checkpoints: bool = False):
+    """
+    Ask the user if they want GIFs generated for the sweep grid plots (page 2 of the summary PDF).
+    Generates GIFs from parquet data, cycling through sweeps one at a time.
+
+    For single protocol: current (pA) and voltage (mV) GIFs
+    For mixed protocol: stimulus and response GIFs
+
+    Args:
+        bundle_dir: Path to bundle directory
+        no_checkpoints: If True, skip interactive prompt and generate GIFs automatically
+    """
+    from PIL import Image as PILImage
+    import io
+
+    p = Path(bundle_dir)
+    man = json.loads((p / "manifest.json").read_text())
+    is_mixed = "stimulus" in man.get("tables", {}) and "response" in man.get("tables", {})
+
+    if is_mixed:
+        label_top, label_bottom = "stimulus", "response"
+    else:
+        label_top, label_bottom = "current (pA)", "voltage (mV)"
+
+    # Check interactive mode
+    is_interactive = sys.stdin.isatty()
+
+    if not is_interactive or no_checkpoints:
+        print("\n[Auto] Skipping GIF generation (non-interactive mode).")
+        return
+
+    print(f"\n{'='*70}")
+    print("🎞️  OPTIONAL: SWEEP GIF GENERATION")
+    print("="*70)
+    print(f"\nThe summary PDF (page 2) shows a grid of all sweeps.")
+    print(f"Would you like to generate animated GIFs that cycle through each sweep?")
+    print(f"  - {label_top} GIF (one frame per sweep)")
+    print(f"  - {label_bottom} GIF (one frame per sweep)")
+    print(f"\nEnter 'y' to generate GIFs, or press Enter to skip: ")
+
+    user_input = input().strip().lower()
+    if user_input not in ('y', 'yes'):
+        print("✓ Skipping GIF generation.")
+        return
+
+    print(f"\nGenerating sweep GIFs...")
+
+    # Load sweep config for stim window markers
+    config_path = p / "sweep_config.json"
+    stim_start, stim_end = None, None
+    if config_path.exists():
+        sweep_config = json.loads(config_path.read_text())
+        stim_start = sweep_config.get("stim_start")
+        stim_end = sweep_config.get("stim_end")
+
+    if is_mixed:
+        table_pairs = [
+            ("stimulus", man["tables"]["stimulus"], "Stimulus", "value"),
+            ("response", man["tables"]["response"], "Response", "value"),
+        ]
+    else:
+        table_pairs = [
+            ("current", man["tables"]["pa"], "Current (pA)", "pA"),
+            ("voltage", man["tables"]["mv"], "Voltage (mV)", "mV"),
+        ]
+
+    for gif_name, table_file, title_prefix, ylabel in table_pairs:
+        df = pd.read_parquet(p / table_file)
+        sweeps = sorted(df["sweep"].unique())
+        if len(sweeps) == 0:
+            continue
+
+        # Compute shared y-axis limits across all sweeps
+        y_min = df["value"].min()
+        y_max = df["value"].max()
+        y_margin = (y_max - y_min) * 0.05
+        y_min -= y_margin
+        y_max += y_margin
+
+        frames = []
+        for sweep_id in sweeps:
+            df_sweep = df[df["sweep"] == sweep_id]
+
+            fig, ax = plt.subplots(figsize=(10, 4))
+            ax.plot(df_sweep["t_s"], df_sweep["value"], linewidth=0.8)
+            if stim_start is not None:
+                ax.axvline(stim_start, color='g', linestyle='--', alpha=0.7, label='Stim Start')
+            if stim_end is not None:
+                ax.axvline(stim_end, color='r', linestyle='--', alpha=0.7, label='Stim End')
+            ax.set_ylim(y_min, y_max)
+            ax.set_xlabel("Time (s)")
+            ax.set_ylabel(ylabel)
+            ax.set_title(f"{title_prefix} — Sweep {sweep_id}  ({sweeps.index(sweep_id)+1}/{len(sweeps)})")
+            if stim_start is not None or stim_end is not None:
+                ax.legend(loc='upper right')
+            plt.tight_layout()
+
+            # Render to PIL image
+            buf = io.BytesIO()
+            fig.savefig(buf, format='png', dpi=120)
+            plt.close(fig)
+            buf.seek(0)
+            frame = PILImage.open(buf).copy()
+            buf.close()
+            frames.append(frame)
+
+        if frames:
+            gif_path = p / f"{gif_name}_sweeps.gif"
+            frames[0].save(
+                gif_path,
+                save_all=True,
+                append_images=frames[1:],
+                duration=800,  # ms per frame
+                loop=0
+            )
+            print(f"  ✓ Saved {gif_name} GIF ({len(frames)} frames): {gif_path.name}")
+
+    print("✓ Sweep GIF generation complete.")
+
+    # --- AP Per Sweep GIF ---
+    ap_dir = p / "AP_Per_Sweep"
+    ap_files = sorted(
+        ap_dir.glob("AP_sweep_*.jpeg"),
+        key=lambda f: int(f.stem.split("_")[-1]),
+    ) if ap_dir.exists() else []
+    if ap_files:
+        print(f"\nFound {len(ap_files)} AP per-sweep plots in AP_Per_Sweep/.")
+        print("Would you like to save these as an animated GIF?")
+        print("Enter 'y' to generate, or press Enter to skip: ")
+        user_input = input().strip().lower()
+        if user_input in ('y', 'yes'):
+            frames = [PILImage.open(f).copy() for f in ap_files]
+            gif_path = p / "ap_per_sweep.gif"
+            frames[0].save(
+                gif_path,
+                save_all=True,
+                append_images=frames[1:],
+                duration=800,
+                loop=0
+            )
+            print(f"  ✓ Saved AP per-sweep GIF ({len(frames)} frames): {gif_path.name}")
+        else:
+            print("✓ Skipping AP per-sweep GIF.")
+
+    # --- Averaged Peaks Per Sweep GIF ---
+    avg_dir = p / "Averaged_Peaks_Per_Sweep"
+    avg_files = sorted(
+        avg_dir.glob("averaged_peaks_for_sweep_*.jpeg"),
+        key=lambda f: int(f.stem.split("_")[-1]),
+    ) if avg_dir.exists() else []
+    if avg_files:
+        print(f"\nFound {len(avg_files)} averaged peaks plots in Averaged_Peaks_Per_Sweep/.")
+        print("Would you like to save these as an animated GIF?")
+        print("Enter 'y' to generate, or press Enter to skip: ")
+        user_input = input().strip().lower()
+        if user_input in ('y', 'yes'):
+            frames = [PILImage.open(f).copy() for f in avg_files]
+            gif_path = p / "averaged_peaks_per_sweep.gif"
+            frames[0].save(
+                gif_path,
+                save_all=True,
+                append_images=frames[1:],
+                duration=800,
+                loop=0
+            )
+            print(f"  ✓ Saved averaged peaks GIF ({len(frames)} frames): {gif_path.name}")
+        else:
+            print("✓ Skipping averaged peaks GIF.")
+
+    # --- Archive plot folders to save space ---
+    plot_folders = [
+        "AP_Per_Sweep",
+        "Averaged_Peaks_Per_Sweep",
+        "SagCurrent",
+        "Sav_Gol_Plots_Per_Sweep",
+        "Kink_Diagnostics",
+        "Input_Resistance",
+        # "Negative_Current_Smoothing",
+        # "filter_visualizations",
+    ]
+    existing_folders = [p / name for name in plot_folders if (p / name).exists()]
+
+    if existing_folders:
+        folder_names = [f.name for f in existing_folders]
+        total_files = sum(len(list(f.rglob("*"))) for f in existing_folders)
+        print(f"\n{'='*70}")
+        print("📦 OPTIONAL: ARCHIVE PLOT FOLDERS")
+        print("="*70)
+        print(f"\nFound {len(existing_folders)} plot folders ({total_files} files total):")
+        for name in folder_names:
+            print(f"  - {name}/")
+        print(f"\nThese are already included in the summary PDF.")
+        print("Would you like to zip them into plots_archive.zip and delete the originals?")
+        print("Enter 'y' to archive, or press Enter to keep as-is: ")
+
+        user_input = input().strip().lower()
+        if user_input in ('y', 'yes'):
+            import zipfile
+            import shutil
+
+            zip_path = p / "plots_archive.zip"
+            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+                for folder in existing_folders:
+                    for file in sorted(folder.rglob("*")):
+                        if file.is_file():
+                            arcname = str(file.relative_to(p))
+                            zf.write(file, arcname)
+
+            # Verify zip was created successfully before deleting
+            if zip_path.exists() and zip_path.stat().st_size > 0:
+                for folder in existing_folders:
+                    shutil.rmtree(folder)
+                print(f"  ✓ Archived {len(existing_folders)} folders ({total_files} files) → {zip_path.name}")
+                print(f"    Archive size: {zip_path.stat().st_size / 1024:.1f} KB")
+            else:
+                print("  ⚠ Zip creation failed. Original folders kept.")
+        else:
+            print("✓ Keeping plot folders as-is.")
 
 
 def load_sweep_config(bundle_dir: str):
@@ -985,7 +1294,7 @@ def load_sweep_config(bundle_dir: str):
         is_abf_bundle = "abf_path" in manifest
     
     if config_path.exists():
-        if VERBOSE: print(f"✓ Loading sweep_config.json from {p.name}")
+        print(f"✓ Loading sweep_config.json from {p.name}")
         with open(config_path) as f:
             config = json.load(f)
         
@@ -1038,7 +1347,7 @@ def load_sweep_config(bundle_dir: str):
         return sweep_config
 
 
-def run_for_bundle(bundle_dir: str, reference_bundle_dir: str = None, skip_plots: bool = False, no_checkpoints: bool = False):
+def run_for_bundle(bundle_dir: str, reference_bundle_dir: str = None, no_checkpoints: bool = False):
     p = Path(bundle_dir)
     pA_was_replaced = False  # Track if pA data was replaced
     
@@ -1047,7 +1356,10 @@ def run_for_bundle(bundle_dir: str, reference_bundle_dir: str = None, skip_plots
     print(f"{'='*70}")
     print(f"Bundle: {p.name}")
     
-    # STEP 0: Load sweep_config early so we can use it for data processing
+    # STEP 0a: Get user preferences for optional supplemental plots
+    plot_preferences = get_plot_preferences(no_checkpoints=no_checkpoints)
+    
+    # STEP 0b: Load sweep_config early so we can use it for data processing
     sweep_config = load_sweep_config(bundle_dir)
     
     # STEP 1: Check for hardware malfunction (empty pA, 2 mV channels)
@@ -1056,14 +1368,14 @@ def run_for_bundle(bundle_dir: str, reference_bundle_dir: str = None, skip_plots
         print("  Both channels recorded as voltage (empty current data).")
         
         # Step 1a: Fix mV data
-        if VERBOSE: print("\n>>> Fixing voltage data: extracting correct mV channel...")
+        print("\n>>> Fixing voltage data: extracting correct mV channel...")
         if fix_hardware_malfunction_mV(bundle_dir):
             print("  ✓ Voltage data fixed")
         else:
             print("  ✗ Failed to fix voltage data")
         
         # Step 1b: Replace pA with reference
-        if VERBOSE: print("\n>>> Replacing empty current data with reference recording...")
+        print("\n>>> Replacing empty current data with reference recording...")
         
         if reference_bundle_dir is None:
             print("    No reference recording provided - skipping current data replacement")
@@ -1093,7 +1405,7 @@ def run_for_bundle(bundle_dir: str, reference_bundle_dir: str = None, skip_plots
         
         if reference_bundle_dir:
             try:
-                if VERBOSE: print(f"\n>>> Replacing faulty current data with reference recording...")
+                print(f"\n>>> Replacing faulty current data with reference recording...")
                 replace_current_data_with_reference(bundle_dir, reference_bundle_dir, sweep_config)
                 print()
             except Exception as e:
@@ -1162,7 +1474,6 @@ def run_for_bundle(bundle_dir: str, reference_bundle_dir: str = None, skip_plots
                 cutoff_hz=filter_cutoff,
                 sweeps_to_filter=sweeps_to_filter,
                 inplace=True,
-                verbose=False
             )
             print(f"  ✓ Low-pass filter applied ({filter_cutoff/1000:.0f} kHz cutoff)")
             print(f"    - Filtered {filter_result['n_sweeps_mv']} voltage sweeps")
@@ -1173,8 +1484,8 @@ def run_for_bundle(bundle_dir: str, reference_bundle_dir: str = None, skip_plots
             df_pa = pd.read_parquet(p / man["tables"]["pa"])
             
             # Generate filter visualizations only if filter was actually applied
-            print(f"  Generating filter visualizations...")
-            visualize_filter_all_sweeps(bundle_dir, skip_plots=skip_plots, cutoff_hz=filter_cutoff, sampling_rate=fs)
+            # print(f"  Generating filter visualizations...")
+            # visualize_filter_all_sweeps(bundle_dir, cutoff_hz=filter_cutoff, sampling_rate=fs)
             print(f"  ✓ Sweep configuration & filtering complete")
         except Exception as e:
             print(f"  ⚠ WARNING: Low-pass filter failed: {e}")
@@ -1194,20 +1505,17 @@ def run_for_bundle(bundle_dir: str, reference_bundle_dir: str = None, skip_plots
     # If no kept_sweeps defined, use all available sweeps
     if not kept_sweeps:
         kept_sweeps = sorted(df_mv["sweep"].unique().tolist())
-        if VERBOSE:
-            print(f"\n>>> No sweep filter defined - using all {len(kept_sweeps)} sweeps")
-    elif VERBOSE:
+        print(f"\n>>> No sweep filter defined - using all {len(kept_sweeps)} sweeps")
+    else:
         print(f"\n>>> Filtering to kept sweeps: {len(kept_sweeps)} sweeps")
 
     # Generate kept/dropped sweep visualizations in Step 2 (configuration stage)
-    if not skip_plots:
-        print(f"  Generating kept/dropped sweep visualizations...")
-        try:
-            visualize_sweeps_from_parquet(bundle_dir, kept_sweeps, dropped_sweeps)
-            print(f"  ✓ Kept/dropped sweep visualizations created")
-        except Exception as e:
-            if VERBOSE:
-                print(f"  ⚠ WARNING: Failed to generate kept/dropped sweep visualizations: {e}")
+    print(f"  Generating kept/dropped sweep visualizations...")
+    try:
+        visualize_sweeps_from_parquet(bundle_dir, kept_sweeps, dropped_sweeps)
+        print(f"  ✓ Kept/dropped sweep visualizations created")
+    except Exception as e:
+        print(f"  ⚠ WARNING: Failed to generate kept/dropped sweep visualizations: {e}")
     
     # Auto-skip the pause prompt for automated pipeline (no interactive input)
     # Check if we're running in non-interactive mode or with no_checkpoints flag
@@ -1233,14 +1541,27 @@ def run_for_bundle(bundle_dir: str, reference_bundle_dir: str = None, skip_plots
         # Auto-proceed in non-interactive mode
         print("\n[Auto] Proceeding with analysis (non-interactive mode)...")
     
+    # Canonical voltage cleaning: remove spikes (incl. spontaneous) from negative-
+    # current sweeps so all downstream metrics read from one consistent source.
+    print(f"\n[Step 2.5] Cleaning voltage for negative-current sweeps...")
+    try:
+        from voltage_cleaning import clean_voltage_for_negative_currents
+        clean_voltage_for_negative_currents(bundle_dir)
+        # Reload manifest + voltage from the now-cleaned file
+        man = json.loads((p / "manifest.json").read_text())
+        df_mv = pd.read_parquet(p / man["tables"]["mv"])
+        print(f"  Reloaded voltage from cleaned parquet ({df_mv.shape[0]:,} samples)")
+    except Exception as e:
+        print(f"  WARNING: Voltage cleaning failed: {e}")
+        print(f"  Proceeding with un-cleaned voltage data...")
+
     print(f"\n[Step 3] Resting membrane potential calculation...")
     # Filter all dataframes to only include kept sweeps
     df_mv_kept = df_mv[df_mv["sweep"].isin(kept_sweeps)].copy()
     df_pa_kept = df_pa[df_pa["sweep"].isin(kept_sweeps)].copy()
     
-    if VERBOSE:
-        print(f"    mV data: {len(df_mv_kept)} rows (from {len(df_mv)})")
-        print(f"    pA data: {len(df_pa_kept)} rows (from {len(df_pa)})")
+    print(f"    mV data: {len(df_mv_kept)} rows (from {len(df_mv)})")
+    print(f"    pA data: {len(df_pa_kept)} rows (from {len(df_pa)})")
     
     # sweep_config was already loaded at the beginning of this function
     print(f"  Calculating resting membrane potential...")
@@ -1292,11 +1613,9 @@ def run_for_bundle(bundle_dir: str, reference_bundle_dir: str = None, skip_plots
     df_pa_kept = df_pa_kept[df_pa_kept["sweep"].isin(kept_sweeps)].copy()
     df_analysis = pd.read_parquet(p /"analysis.parquet")
     fs = float(man["meta"]["sampleRate_Hz"])  # Convert from string to float
-    
+
     run_spike_detection(df_mv_kept, df_pa_kept, df_analysis, fs, bundle_dir, 
-                       pA_was_replaced=pA_was_replaced, sweep_config=sweep_config,
-                       skip_plots=skip_plots)
-    if VERBOSE: print("Spike detection was successful")
+                       pA_was_replaced=pA_was_replaced, sweep_config=sweep_config)
     #After running above line, analysis.parquet and analysis.csv and manifest.json will be updated
     
     print(f"  ✓ Spike detection complete")
@@ -1324,8 +1643,7 @@ def run_for_bundle(bundle_dir: str, reference_bundle_dir: str = None, skip_plots
     #low pass filter
     print(f"  🔄 Applying Savitzky-Golay low-pass filter...")
     df_analysis = pd.read_parquet(p /"analysis.parquet")
-    run_sav_gol(df_mv_kept, df_analysis, fs, bundle_dir, sweep_config=sweep_config, skip_plots=skip_plots)
-    if VERBOSE: print("Running Sav Gol was successful")
+    run_sav_gol(df_mv_kept, df_analysis, fs, bundle_dir, sweep_config=sweep_config)
     
     print(f"  ✓ Savitzky-Golay filtering complete")
     
@@ -1352,8 +1670,7 @@ def run_for_bundle(bundle_dir: str, reference_bundle_dir: str = None, skip_plots
     #input resistance
     print(f"  ⚡ Computing input resistance...")
     # Reuse df_pa_kept from spike detection (pA data unchanged between steps)
-    get_input_resistance(df_mv_kept, df_pa_kept, bundle_dir, sweep_config=sweep_config, skip_plots=skip_plots)
-    if VERBOSE: print("Getting input resistance was successful")
+    get_input_resistance(df_mv_kept, df_pa_kept, bundle_dir, sweep_config=sweep_config)
     #After running above line, manifest.json will be updated
 
     print(f"  ✓ Input resistance calculation complete")
@@ -1379,7 +1696,7 @@ def run_for_bundle(bundle_dir: str, reference_bundle_dir: str = None, skip_plots
     print(f"\n[Step 7] Sag current analysis (HCN channels)...")
     print(f"  📊 Computing sag current from negative-current sweeps...")
     
-    sag_results = calculate_sag_for_bundle(bundle_dir, verbose=True)
+    sag_results = calculate_sag_for_bundle(bundle_dir)
     
     if sag_results:
         # Add sag measurements to analysis.parquet
@@ -1446,15 +1763,16 @@ def run_for_bundle(bundle_dir: str, reference_bundle_dir: str = None, skip_plots
     #attach manifest details to analysis results
     df_analysis = pd.read_parquet(p /"analysis.parquet")
     attach_manifest_to_analysis(bundle_dir, df_analysis)
-    if VERBOSE:
-        print("Adding to analysis was successful")
-        print(f"All updates completed and successful for {bundle_dir}.")
+    print("Adding to analysis was successful")
+    print(f"All updates completed and successful for {bundle_dir}.")
 
     # Generate master summary plot combining all figures
-    if not skip_plots:
-        print("🖼️  Generating summary PDF...")
-        generate_summary_plot(bundle_dir)
-    
+    print("🖼️  Generating summary PDF...")
+    generate_summary_plot(bundle_dir, plot_preferences=plot_preferences)
+
+    # Ask user if they want animated GIFs of sweep traces
+    prompt_and_generate_sweep_gifs(bundle_dir, no_checkpoints=no_checkpoints)
+
     # FINAL CHECKPOINT: Pipeline complete
     print(f"\n{'='*70}")
     print("✅ ANALYSIS PIPELINE COMPLETE!")
