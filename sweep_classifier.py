@@ -26,6 +26,7 @@ from PIL import Image
 from spike_detection_new import run_spike_detection
 from analysis_config import (
     BASELINE_THRESHOLD_PA,
+    ABF_BASELINE_THRESHOLD_PA,
     STIMULUS_THRESHOLD_PA,
     MIN_STIMULUS_DURATION_S,
     MIN_FLAT_RATIO,
@@ -437,16 +438,22 @@ def find_contiguous_segments(mask):
     return [(s, e) for s, e in zip(starts, ends) if e > s]
 
 
-def find_baseline_window(current, time):
+def find_baseline_window(current, time, baseline_threshold_pa=None):
     """
     Find when NO current is injected (baseline period).
-    
+
     Strategy:
     1. Look for first contiguous segment at start where current ≈ 0
     2. If none at start, use last segment at end
     3. Fallback: use first 10ms
+
+    Args:
+        baseline_threshold_pa: |current| below this is treated as "no injection".
+            If None, uses the global BASELINE_THRESHOLD_PA. Pass a relaxed value
+            (e.g. ABF_BASELINE_THRESHOLD_PA) for noisier current traces.
     """
-    is_baseline = np.abs(current) < BASELINE_THRESHOLD_PA
+    threshold = baseline_threshold_pa if baseline_threshold_pa is not None else BASELINE_THRESHOLD_PA
+    is_baseline = np.abs(current) < threshold
     baseline_segments = find_contiguous_segments(is_baseline)
     
     # Prefer first baseline segment
@@ -917,30 +924,29 @@ def classify_bundle_sweeps_abf(bundle_dir, plot_sweeps=True):
     best_stim_end = None
     best_baseline_start = None
     best_baseline_end = None
-    
+    best_baseline_note = None
+
     for sweep_id in all_sweeps:
         df_sweep = df_pa[df_pa['sweep'] == sweep_id]
         current = df_sweep["value"].values
         time = df_sweep["t_s"].values
-        
+
         # Find stimulus window for this sweep
         stim_start, stim_end, stim_level = find_stimulus_window(current, time)
         stim_duration = stim_end - stim_start
-        
+
         # Track the sweep with the longest/clearest stimulus
         if stim_level != 0 and stim_duration > best_stim_duration:
             best_stim_duration = stim_duration
             best_sweep_id = sweep_id
             best_stim_start = stim_start
             best_stim_end = stim_end
-            # For ABF: baseline is everything BEFORE stimulus start, not current-based detection
-            # This is more reliable for ABF files which may have noisy current traces
-            best_baseline_start = time[0]
-            # Use 90% of pre-stimulus time as baseline (leave small gap before stimulus)
-            best_baseline_end = stim_start * 0.9 if stim_start > 0.1 else stim_start - 0.01
-            if best_baseline_end < best_baseline_start + 0.05:
-                # Ensure at least 50ms of baseline
-                best_baseline_end = min(best_baseline_start + 0.5, stim_start)
+            # Data-driven baseline detection with a relaxed threshold for ABF's
+            # noisier current traces; same approach as NWB but with a wider
+            # "near-zero" band so leakage/DC offset doesn't trip the detector.
+            best_baseline_start, best_baseline_end, best_baseline_note = find_baseline_window(
+                current, time, baseline_threshold_pa=ABF_BASELINE_THRESHOLD_PA
+            )
     
     if best_sweep_id is None:
         # No sweep had detectable current - use default windows
@@ -959,6 +965,9 @@ def classify_bundle_sweeps_abf(bundle_dir, plot_sweeps=True):
         print(f"  ✓ Reference sweep: {best_sweep_id}")
         print(f"  ✓ Stimulus window: [{best_stim_start:.4f}, {best_stim_end:.4f}] s (duration: {best_stim_duration:.4f}s)")
         print(f"  ✓ Baseline window: [{best_baseline_start:.4f}, {best_baseline_end:.4f}] s")
+        if best_baseline_note:
+            print(f"  ⚠ {best_baseline_note}")
+            print(f"    Pre-stim current never settled within ±{ABF_BASELINE_THRESHOLD_PA:.0f} pA — v_rest will be averaged over only ~10 ms.")
     
     # Extract stimulus values from ABF epoch information (protocol-defined stimulus levels per sweep)
     print(f"\n--- Step 2b: Extracting stimulus levels from ABF epoch information ---")
@@ -1006,6 +1015,8 @@ def classify_bundle_sweeps_abf(bundle_dir, plot_sweeps=True):
         "consistent_window": True,  # Flag indicating ABF-style processing
         "stimulus_source": "ABF_epoch_info"  # Stimulus levels from protocol-defined epochs, not measured current
     }
+    if best_baseline_note:
+        sweep_config["baseline_note"] = best_baseline_note
     
     valid_count = 0
     rejected_sweeps_list = []

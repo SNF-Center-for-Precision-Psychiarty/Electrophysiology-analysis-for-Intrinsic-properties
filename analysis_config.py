@@ -69,7 +69,8 @@ BASELINE_WINDOW_S = BASELINE_WINDOW_MS / 1000.0
 # ============================================================================
 
 # Current thresholds for stimulus detection
-BASELINE_THRESHOLD_PA = 0.01      # Current below this is considered "no injection"
+BASELINE_THRESHOLD_PA = 0.01      # Current below this is considered "no injection" (NWB)
+ABF_BASELINE_THRESHOLD_PA = 5.0   # Relaxed threshold for ABF (noisier current traces)
 STIMULUS_THRESHOLD_PA = 5.0       # Current above this is considered "injection"
 
 # Stimulus window detection
