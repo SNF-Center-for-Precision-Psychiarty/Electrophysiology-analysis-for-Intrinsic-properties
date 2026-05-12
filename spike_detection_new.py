@@ -60,24 +60,41 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
     # For mixed protocol, we will still use per-sweep windows later (absolute times)
     # For single protocol, extract a reference window now
         try:
-            # Find first valid sweep for reference
+            # Prefer a valid sweep, but fall back to any sweep with timing windows
+            # so spike detection can still run on bundles where 0 sweeps were marked
+            # valid (matches the existing fallback in run_analysis that uses all
+            # sweeps when kept_sweeps is empty).
             valid_sweep = None
+            fallback_sweep = None
             for sweep_id, sweep_data in sweep_config.get("sweeps", {}).items():
-                if sweep_data.get("valid", False):
+                windows = sweep_data.get("windows") or {}
+                has_windows = (
+                    windows.get("stimulus_start_s") is not None
+                    and windows.get("stimulus_end_s") is not None
+                )
+                if sweep_data.get("valid", False) and has_windows:
                     valid_sweep = sweep_id
                     break
-            
-            if valid_sweep is not None:
-                windows = sweep_config["sweeps"][valid_sweep]["windows"]
+                if fallback_sweep is None and has_windows:
+                    fallback_sweep = sweep_id
+
+            reference_sweep = valid_sweep if valid_sweep is not None else fallback_sweep
+            using_fallback = valid_sweep is None and fallback_sweep is not None
+
+            if reference_sweep is not None:
+                windows = sweep_config["sweeps"][reference_sweep]["windows"]
                 relative_t_stim_start = windows["stimulus_start_s"]
                 relative_t_stim_end = windows["stimulus_end_s"]
-                
+
                 # Simplified: Only store stimulus times and ISI bin range
                 # Per-sweep filtering uses sweep-specific times from sweep_config
                 analysis_windows = {
                     't_stim_start': relative_t_stim_start,
                     't_stim_end': relative_t_stim_end
                 }
+                if using_fallback:
+                    print(f"WARNING: No sweep marked valid in sweep_config — "
+                          f"deriving analysis windows from sweep {reference_sweep} (invalid).")
                 print(f"Using analysis windows from sweep_config.json:")
                 print(f"  Protocol type: {'MIXED' if is_mixed else 'SINGLE'}")
                 print(f"  Reference stimulus period: [{relative_t_stim_start:.6f}, {relative_t_stim_end:.6f}] s")
@@ -604,7 +621,7 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
                         threshold_idx,
                         kink_idx,
                         up_idx,      # max upstroke index
-                        peak_idx,
+                        peak,        # voltage peak index for this spike
                         Path(bundle_path) / "Kink_Diagnostics",
                         f"sweep{sweep_number}_peak{i}"
                 )

@@ -86,14 +86,27 @@ def run_sav_gol(df, df_analysis, fs, bundle_path, sweep_config=None, plot_prefer
     try:
         # Get unique sweeps in the input dataframe
         available_sweeps = set(df["sweep"].unique())
-        
+
         # Track sweeps excluded from baseline analysis and their reasons
         exclusion_reasons = {}  # sweep_id -> reason
-        
+
+        # Detect bundles where 0 sweeps are marked valid so we can fall back to
+        # using any sweep that has baseline timing (matches the spike_detection
+        # and input_resistance fallbacks).
+        any_valid = any(
+            sweep_data.get("valid", False)
+            for sweep_data in sweep_config.get("sweeps", {}).values()
+        )
+        accept_invalid = not any_valid
+        if accept_invalid:
+            print("WARNING: No sweep marked valid in sweep_config — "
+                  "using baseline windows from invalid sweeps for filtering.")
+
         for sweep_id, sweep_data in sweep_config.get("sweeps", {}).items():
             sweep_id_int = int(sweep_id)
-            # Only include sweeps that are both valid AND present in the dataframe
-            if sweep_data.get("valid", False) and sweep_id_int in available_sweeps:
+            is_valid = sweep_data.get("valid", False)
+            include = (is_valid or accept_invalid) and sweep_id_int in available_sweeps
+            if include:
                 # Include all valid sweeps (including 0 pA control sweeps)
                 # 0 pA sweeps will have entire sweep as baseline, which is fine for filtering
                 windows = sweep_data.get("windows", {})
@@ -104,11 +117,11 @@ def run_sav_gol(df, df_analysis, fs, bundle_path, sweep_config=None, plot_prefer
                 else:
                     exclusion_reasons[sweep_id_int] = "missing baseline timing in sweep_config"
             else:
-                if not sweep_data.get("valid", False):
+                if not is_valid and not accept_invalid:
                     exclusion_reasons[sweep_id_int] = "marked as invalid in sweep_config"
                 elif sweep_id_int not in available_sweeps:
                     exclusion_reasons[sweep_id_int] = "sweep not found in data"
-        
+
         print(f"Found baseline windows for {len(baseline_windows)} sweeps (out of {len(available_sweeps)} sweeps in data)")
         if len(baseline_windows) == 0:
             print("ERROR: No baseline windows found in sweep_config")
@@ -394,116 +407,120 @@ def run_sav_gol(df, df_analysis, fs, bundle_path, sweep_config=None, plot_prefer
 
     # Metric 1: Get spread of RMPs from all windows across all sweeps
     Vm_all = long_df["value_50ms_mean"].to_numpy()
-    
+
     # Remove NaN values
     Vm_all = Vm_all[~np.isnan(Vm_all)]
-    
-    # Check for empty or all-NaN data
-    if len(Vm_all) == 0:
-        print("ERROR: No valid voltage data to analyze (all NaN or empty)")
-        raise ValueError("No valid voltage data in downsampled dataframe")
-    
-    plt.figure(figsize=(8,6))
-    vmin, vmax = Vm_all.min(), Vm_all.max()
-    bin_step = 0.25 # fixed 0.25mV bins
-    
-    print(f"RMP range: [{vmin:.4f}, {vmax:.4f}] mV")
-    
-    # Ensure vmax > vmin to avoid numpy.arange error
-    if vmax <= vmin:
-        vmax = vmin + bin_step
-    
-    # Create histogram with safe binning using fixed number of bins
-    n_bins = max(10, int(np.ceil((vmax - vmin) / bin_step)))
-    plt.hist(Vm_all, bins=n_bins, color="skyblue", edgecolor='k')
-    plt.xlabel("Resting Membrane Potential (mV)")
-    plt.ylabel("Frequency")
-    plt.title(f"Resting Membrane Potential Distribution ({window_ms} ms bins across sweeps)")
-    plt.tight_layout()
-    #plt.show()
-    plt.savefig(bundle_path /'RMP_Dist_Post_Filter.jpeg', dpi=150)
-    plt.close()
 
+    drift_metrics_valid = len(Vm_all) > 0
 
-    # Metric 2: drift range
-    drift_range = vmax - vmin
+    if not drift_metrics_valid:
+        print(f"WARNING: No baseline window in any sweep is ≥ {window_ms} ms — "
+              f"drift metrics (drift_range, d_std, normalized_signal_variability, "
+              f"filtered_RMP_derivative) will be NaN for this bundle.")
+        drift_range = np.nan
+        d_std = np.nan
+        mean_metric = np.nan
+        dvdt_means = pd.DataFrame({
+            "sweep": sorted(baseline_windows.keys()),
+            "filtered_RMP_derivative": np.nan,
+        })
+    else:
+        plt.figure(figsize=(8,6))
+        vmin, vmax = Vm_all.min(), Vm_all.max()
+        bin_step = 0.25 # fixed 0.25mV bins
 
-    # Metric 3: drift standard deviation
-    d_std = np.std(Vm_all)
+        print(f"RMP range: [{vmin:.4f}, {vmax:.4f}] mV")
 
-    # Metric 4: normalized measure of signal variability
-    # for every sweep, get the difference between each mean RMP
-    long_df["diff"] = (
-        long_df
-        .groupby("sweep")["value_50ms_mean"]
-        .diff()
-    )
+        # Ensure vmax > vmin to avoid numpy.arange error
+        if vmax <= vmin:
+            vmax = vmin + bin_step
 
-    # take the absolute value of the difference values
-    long_df["abs_diff"] = long_df["diff"].abs()
+        # Create histogram with safe binning using fixed number of bins
+        n_bins = max(10, int(np.ceil((vmax - vmin) / bin_step)))
+        plt.hist(Vm_all, bins=n_bins, color="skyblue", edgecolor='k')
+        plt.xlabel("Resting Membrane Potential (mV)")
+        plt.ylabel("Frequency")
+        plt.title(f"Resting Membrane Potential Distribution ({window_ms} ms bins across sweeps)")
+        plt.tight_layout()
+        plt.savefig(bundle_path /'RMP_Dist_Post_Filter.jpeg', dpi=150)
+        plt.close()
 
-    # for s in [1, 2]:
-    #     print(long_df[long_df["sweep"] == s].head(3))
+        # Metric 2: drift range
+        drift_range = vmax - vmin
 
-    # Calculate time duration per sweep based on number of time windows
-    # Each window is window_ms (e.g., 25ms = 0.025s), so total duration = num_windows * window_s
-    sweep_durations = (
-        long_df
-        .groupby("sweep")
-        .size()
-        .mul(window_s)  # each window is window_s seconds
-    )
-    
-    # Add up all abs_diff values per sweep, divide by that sweep's actual duration
-    per_sweep_metric = (
-        long_df
-        .groupby("sweep")["abs_diff"]
-        .sum()
-        .div(sweep_durations) 
-    )
+        # Metric 3: drift standard deviation
+        d_std = np.std(Vm_all)
 
-    # after doing this for every sweep, average across all of them
-    mean_metric = per_sweep_metric.mean()
+        # Metric 4: normalized measure of signal variability
+        # for every sweep, get the difference between each mean RMP
+        long_df["diff"] = (
+            long_df
+            .groupby("sweep")["value_50ms_mean"]
+            .diff()
+        )
 
-    def safe_gradient(x, dt):
-        arr = x.to_numpy()
-        if len(arr) < 2:
-            return np.full_like(arr, np.nan, dtype=float)
-        return np.gradient(arr, dt)
+        # take the absolute value of the difference values
+        long_df["abs_diff"] = long_df["diff"].abs()
 
-    # Metric 5: Derivative of filtered RMPs
-    # Calculated over time bins (window_ms). Change in time = window_s
-    dt = window_s  # Time step between bins (e.g., 0.025s for 25ms windows)
-    long_df["dVdt"] = (
-        long_df
-        .groupby("sweep")["value_50ms_mean"]
-        .transform(lambda x: safe_gradient(x, dt))
-    )
+        # Calculate time duration per sweep based on number of time windows
+        # Each window is window_ms (e.g., 25ms = 0.025s), so total duration = num_windows * window_s
+        sweep_durations = (
+            long_df
+            .groupby("sweep")
+            .size()
+            .mul(window_s)  # each window is window_s seconds
+        )
 
-    # Take the average dv/dt for each sweep
-    dvdt_means = (
-        long_df.groupby("sweep")["dVdt"]
-        .mean()
-        .reset_index(name="filtered_RMP_derivative")
-    )
-    
-    # Report on derivative calculation results
-    print("\n--- Derivative Calculation Summary ---")
-    total_sweeps = len(baseline_windows)
-    calculated_sweeps = dvdt_means["filtered_RMP_derivative"].notna().sum()
-    nan_sweeps = dvdt_means["filtered_RMP_derivative"].isna().sum()
-    
-    print(f"Total sweeps with baseline windows: {total_sweeps}")
-    print(f"Sweeps with valid derivative: {calculated_sweeps}")
-    print(f"Sweeps with NaN derivative: {nan_sweeps}")
-    
-    if nan_sweeps > 0:
-        nan_sweep_ids = dvdt_means[dvdt_means["filtered_RMP_derivative"].isna()]["sweep"].tolist()
-        print(f"Sweeps with NaN: {nan_sweep_ids}")
-        print("Common reasons:")
-        print(f"  - Baseline duration < {window_ms}ms (need ≥2 windows for derivative)")
-        print("  - Insufficient samples at sweep's sampling rate")
-    print("---------------------------------------\n")
+        # Add up all abs_diff values per sweep, divide by that sweep's actual duration
+        per_sweep_metric = (
+            long_df
+            .groupby("sweep")["abs_diff"]
+            .sum()
+            .div(sweep_durations)
+        )
+
+        # after doing this for every sweep, average across all of them
+        mean_metric = per_sweep_metric.mean()
+
+        def safe_gradient(x, dt):
+            arr = x.to_numpy()
+            if len(arr) < 2:
+                return np.full_like(arr, np.nan, dtype=float)
+            return np.gradient(arr, dt)
+
+        # Metric 5: Derivative of filtered RMPs
+        # Calculated over time bins (window_ms). Change in time = window_s
+        dt = window_s  # Time step between bins (e.g., 0.025s for 25ms windows)
+        long_df["dVdt"] = (
+            long_df
+            .groupby("sweep")["value_50ms_mean"]
+            .transform(lambda x: safe_gradient(x, dt))
+        )
+
+        # Take the average dv/dt for each sweep
+        dvdt_means = (
+            long_df.groupby("sweep")["dVdt"]
+            .mean()
+            .reset_index(name="filtered_RMP_derivative")
+        )
+
+        # Report on derivative calculation results
+        print("\n--- Derivative Calculation Summary ---")
+        total_sweeps = len(baseline_windows)
+        calculated_sweeps = dvdt_means["filtered_RMP_derivative"].notna().sum()
+        nan_sweeps = dvdt_means["filtered_RMP_derivative"].isna().sum()
+
+        print(f"Total sweeps with baseline windows: {total_sweeps}")
+        print(f"Sweeps with valid derivative: {calculated_sweeps}")
+        print(f"Sweeps with NaN derivative: {nan_sweeps}")
+
+        if nan_sweeps > 0:
+            nan_sweep_ids = dvdt_means[dvdt_means["filtered_RMP_derivative"].isna()]["sweep"].tolist()
+            print(f"Sweeps with NaN: {nan_sweep_ids}")
+            print("Common reasons:")
+            print(f"  - Baseline duration < {window_ms}ms (need ≥2 windows for derivative)")
+            print("  - Insufficient samples at sweep's sampling rate")
+        print("---------------------------------------\n")
 
 
     #_________________________________________________________________________

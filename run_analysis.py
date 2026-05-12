@@ -550,6 +550,10 @@ def generate_summary_plot(bundle_dir: str, plot_preferences: dict = None):
     
     try:
         from PIL import Image
+        # Disable PIL's decompression-bomb guard: our own grid images for large
+        # mixed-protocol bundles (60+ sweeps) can exceed the default ~178M pixel
+        # cap, but they are trusted local files we generate.
+        Image.MAX_IMAGE_PIXELS = None
     except ImportError:
         print("  WARNING: Pillow not installed. Skipping summary plot.")
         print("  Install with: pip install Pillow")
@@ -1061,6 +1065,8 @@ def prompt_and_generate_sweep_gifs(bundle_dir: str, no_checkpoints: bool = False
         no_checkpoints: If True, skip interactive prompt and generate GIFs automatically
     """
     from PIL import Image as PILImage
+    # Disable PIL's decompression-bomb guard for our own large grid images.
+    PILImage.MAX_IMAGE_PIXELS = None
     import io
 
     p = Path(bundle_dir)
@@ -1627,7 +1633,14 @@ def run_for_bundle(bundle_dir: str, reference_bundle_dir: str = None, no_checkpo
     df_pa_kept = pd.read_parquet(p / man["tables"]["pa"])
     df_pa_kept = df_pa_kept[df_pa_kept["sweep"].isin(kept_sweeps)].copy()
     df_analysis = pd.read_parquet(p /"analysis.parquet")
-    fs = float(man["meta"]["sampleRate_Hz"])  # Convert from string to float
+    # Mixed-protocol bundles store sampleRate_Hz as a list (per-sweep rates differ).
+    # run_spike_detection and run_sav_gol both handle the list case directly, so
+    # pass it through unchanged; convert single rates to float as before.
+    sample_rate_hz = man["meta"]["sampleRate_Hz"]
+    if isinstance(sample_rate_hz, list):
+        fs = [float(r) for r in sample_rate_hz]
+    else:
+        fs = float(sample_rate_hz)
 
     run_spike_detection(df_mv_kept, df_pa_kept, df_analysis, fs, bundle_dir,
                        pA_was_replaced=pA_was_replaced, sweep_config=sweep_config, plot_preferences=plot_preferences)

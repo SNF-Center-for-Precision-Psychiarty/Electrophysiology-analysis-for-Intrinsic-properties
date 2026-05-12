@@ -8,7 +8,7 @@ Supports both ABF (patch clamp) and NWB (Neurodata Without Borders) formats.
 
 This script will guide you through the analysis process step-by-step.
 """
-11
+
 import sys
 import os
 import subprocess
@@ -591,7 +591,11 @@ For each bundle, this will:
             if idx - 1 < start_idx:
                 print(f"\n[{idx}/{len(bundle_dirs)}] Skipping (already done): {bundle_path.name}")
                 continue
-            
+
+            if (bundle_path / "analysis.parquet").exists():
+                print(f"\n[{idx}/{len(bundle_dirs)}] Skipping (already analysed): {bundle_path.name}")
+                continue
+
             print(f"\n{'='*70}")
             print(f"[{idx}/{len(bundle_dirs)}] Analyzing: {bundle_path.relative_to(parent_path)}")
             print('='*70)

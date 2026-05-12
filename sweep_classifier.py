@@ -22,6 +22,9 @@ import sys
 from pathlib import Path
 from matplotlib.backends.backend_pdf import PdfPages
 from PIL import Image
+# Disable PIL's decompression-bomb guard for our own large grid images
+# (mixed-protocol bundles with 60+ sweeps can exceed the default ~178M pixel cap).
+Image.MAX_IMAGE_PIXELS = None
 
 from spike_detection_new import run_spike_detection
 from analysis_config import (
@@ -744,8 +747,17 @@ def sweep_config_to_json(bundle_dir, df_stim, manifest, df_voltage=None):
     """
     p = Path(bundle_dir)
     
-    # Extract sampling rate from manifest for consistent artifact detection
-    sampling_rate = float(manifest["meta"]["sampleRate_Hz"]) if "sampleRate_Hz" in manifest.get("meta", {}) else None
+    # Extract sampling rate from manifest for consistent artifact detection.
+    # Mixed-protocol bundles store sampleRate_Hz as a list (per-sweep rates differ);
+    # in that case pass None so analyze_single_sweep estimates dt from each sweep's
+    # own time vector.
+    fs_meta = manifest.get("meta", {}).get("sampleRate_Hz")
+    if isinstance(fs_meta, list):
+        sampling_rate = None
+    elif fs_meta is not None:
+        sampling_rate = float(fs_meta)
+    else:
+        sampling_rate = None
     
     # Get all unique sweep IDs (column is 'sweep', not 'sweep_id')
     all_sweeps = sorted(df_stim['sweep'].unique())
@@ -887,8 +899,17 @@ def classify_bundle_sweeps_abf(bundle_dir, plot_sweeps=True):
     with open(manifest_path) as f:
         manifest = json.load(f)
     
-    # Extract sampling rate from manifest for consistent artifact detection
-    sampling_rate = float(manifest["meta"]["sampleRate_Hz"]) if "sampleRate_Hz" in manifest.get("meta", {}) else None
+    # Extract sampling rate from manifest for consistent artifact detection.
+    # Mixed-protocol bundles store sampleRate_Hz as a list (per-sweep rates differ);
+    # in that case pass None so analyze_single_sweep estimates dt from each sweep's
+    # own time vector.
+    fs_meta = manifest.get("meta", {}).get("sampleRate_Hz")
+    if isinstance(fs_meta, list):
+        sampling_rate = None
+    elif fs_meta is not None:
+        sampling_rate = float(fs_meta)
+    else:
+        sampling_rate = None
     
     # Load parquet files
     pa_path = p / manifest["tables"]["pa"]

@@ -35,22 +35,38 @@ def get_input_resistance(df, df_pA, bundle_path, sweep_config=None):
         raise ValueError("sweep_config is required for input resistance calculation")
     
     try:
-        # Find first valid sweep to get stimulus window
+        # Prefer a valid sweep, but fall back to any sweep with stimulus timing
+        # so input resistance can still run on bundles where 0 sweeps are valid.
         valid_sweep = None
-        t_stim_min = None
-        t_stim_max = None
-        
+        fallback_sweep = None
+        valid_windows = None
+        fallback_windows = None
+
         for sweep_id, sweep_data in sweep_config.get("sweeps", {}).items():
+            windows = sweep_data.get("windows") or {}
+            t_min = windows.get("stimulus_start_s")
+            t_max = windows.get("stimulus_end_s")
+            if t_min is None or t_max is None:
+                continue
             if sweep_data.get("valid", False):
                 valid_sweep = sweep_id
-                windows = sweep_data.get("windows", {})
-                t_stim_min = windows.get("stimulus_start_s")
-                t_stim_max = windows.get("stimulus_end_s")
+                valid_windows = windows
                 break
-        
-        if t_stim_min is None or t_stim_max is None:
+            if fallback_sweep is None:
+                fallback_sweep = sweep_id
+                fallback_windows = windows
+
+        if valid_sweep is not None:
+            t_stim_min = valid_windows.get("stimulus_start_s")
+            t_stim_max = valid_windows.get("stimulus_end_s")
+        elif fallback_sweep is not None:
+            print(f"WARNING: No sweep marked valid in sweep_config — "
+                  f"deriving stimulus window from sweep {fallback_sweep} (invalid).")
+            t_stim_min = fallback_windows.get("stimulus_start_s")
+            t_stim_max = fallback_windows.get("stimulus_end_s")
+        else:
             raise ValueError("Could not find stimulus window in sweep_config")
-            
+
         print(f"Using stimulus window: [{t_stim_min:.6f}, {t_stim_max:.6f}] s")
     except (KeyError, TypeError) as e:
         raise ValueError(f"Failed to extract stimulus window from sweep_config: {e}")
@@ -177,6 +193,8 @@ def get_input_resistance(df, df_pA, bundle_path, sweep_config=None):
         print(f"Error: Length mismatch ({len(current_avg_vals)} current vs {len(voltage_avg_vals)} voltage)")
     elif len(current_avg_vals) == 0:
         print(f"ERROR: No valid sweeps found (no sweeps without spikes)")
+    elif len(set(current_avg_vals)) == 1:
+        print(f"ERROR: All {len(current_avg_vals)} no-spike sweeps have identical current ({current_avg_vals[0]:.1f} pA) — cannot fit I-V curve")
     else:
         current_avg_vals = np.array(current_avg_vals)
         voltage_avg_vals = np.array(voltage_avg_vals)
@@ -215,7 +233,7 @@ def get_input_resistance(df, df_pA, bundle_path, sweep_config=None):
         manifest = json.load(f)
 
     # Add or update the key in the "analysis" section
-    manifest.setdefault("analysis", {})["input_resistance"] = rin_mohm
+    manifest.setdefault("analysis", {})["input_resistance"] = float(rin_mohm)
 
     # Save the updated manifest
     with open(manifest_path, "w") as f:
