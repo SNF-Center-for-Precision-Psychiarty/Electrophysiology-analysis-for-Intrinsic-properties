@@ -85,8 +85,9 @@ BASELINE_FALLBACK_S = 0.01        # Last resort: use first 10ms if baseline dete
 
 # Second derivative threshold for detecting sharp corners/artifacts
 # Normal AP: d²V/dt² up to ~2 billion mV/s²
-# True artifacts: 20+ billion mV/s²
-SECOND_DERIV_THRESHOLD = 10e9     # 10 billion mV/s²
+# True artifacts (square-wave corners): 20+ billion mV/s²
+# Set above the noise gray zone so single noisy samples don't reject clean traces.
+SECOND_DERIV_THRESHOLD = 20e9     # 20 billion mV/s²
 
 # Voltage cutoff for artifact detection: d²V/dt² peaks at voltages above this are
 # treated as AP-peak rounding (Na+ inactivation collapsing dV/dt), not artifacts.
