@@ -9,9 +9,10 @@ import matplotlib.pyplot as plt
 from scipy.signal import find_peaks
 from pathlib import Path
 from kink_detection import (
-    measure_kink_for_spike, 
+    measure_kink_for_spike,
     plot_kink_diagnostics,
-    should_skip_kink_detection_struggling_cell
+    should_skip_kink_detection_struggling_cell,
+    KINK_RATIO_THRESHOLD,
 )
 from analysis_config import (
     PRE_THRESHOLD_WINDOW_MS,
@@ -313,6 +314,7 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
         kink_ratios = []
         kink_counts = []
         kink_heights = []
+        kink_slopes = []
         
         # Track segment formation statistics
         segment_success_count = 0
@@ -571,10 +573,15 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
             threshold_local = threshold_idx - w1_start_idx
             up_local = up_idx - w1_start_idx
             
-            # Range: threshold to upstroke (NOT including peak at end)
-            kink_v = v_up[threshold_local:up_local + 1]
-            kink_t = t_up[threshold_local:up_local + 1]
-            kink_dvdt = dvdt_up[threshold_local:up_local + 1]
+            # Start kink search where dV/dt first reaches the ratio threshold —
+            # nothing below this can ever pass the ratio gate, so skip it.
+            ks_pts = np.where(dvdt_up[threshold_local:] >= KINK_RATIO_THRESHOLD * max_dvdt_value)[0]
+            ks_local = threshold_local + int(ks_pts[0]) if len(ks_pts) > 0 else threshold_local
+            ks_idx = w1_start_idx + ks_local
+
+            kink_v    = v_up[ks_local:up_local + 1]
+            kink_t    = t_up[ks_local:up_local + 1]
+            kink_dvdt = dvdt_up[ks_local:up_local + 1]
             
             # Check if cell is struggling at this peak (weak amplitude)
             # Skip kink detection for weak spikes at end of sweep
@@ -592,6 +599,7 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
                     'kink_interval_ms': np.nan,
                     'kink_ratio': np.nan,
                     'kink_height_dvdt': np.nan,
+                    'kink_slope_dvdt': np.nan,
                     'kink_idx': None,
                 }
                 print(f"  ⊘ Kink detection skipped for Sweep {sweep_number}, Peak #{i+1} (cell struggling - amplitude {spike_amplitudes[i]:.2f}mV < 60% of median)")
@@ -609,7 +617,7 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
                 print(f"      Kink interval: {kink_metrics['kink_interval_ms']:.2f} ms | Kink ratio: {kink_metrics['kink_ratio']:.3f}")
                 # Convert local kink index to global
                 kink_idx_local = kink_metrics['kink_idx']
-                kink_idx = threshold_idx + kink_idx_local
+                kink_idx = ks_idx + kink_idx_local
                 print(f"      Ihreshold index: {threshold_idx}")
                 print(f"      Kink index: {kink_idx}")
                 print(f"      Max Upstroke index: {up_idx}")
@@ -620,11 +628,12 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
                         time,
                         threshold_idx,
                         kink_idx,
-                        up_idx,      # max upstroke index
-                        peak,        # voltage peak index for this spike
+                        up_idx,
+                        peak,
                         Path(bundle_path) / "Kink_Diagnostics",
-                        f"sweep{sweep_number}_peak{i}"
-                )
+                        f"sweep{sweep_number}_peak{i}",
+                        search_start_idx=ks_idx,
+                    )
 
             # Collect per-peak metrics
             peak_voltages.append(v_peak)
@@ -650,6 +659,7 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
             kink_intervals_ms.append(kink_metrics['kink_interval_ms'])
             kink_ratios.append(kink_metrics['kink_ratio'])
             kink_heights.append(kink_metrics['kink_height_dvdt'])
+            kink_slopes.append(kink_metrics['kink_slope_dvdt'])
 
             # If we have gotten this far, it has passed all checks and is a valid peak
             valid_peaks.append(peak)  # Store original peak index for ISI calculation
@@ -1007,6 +1017,7 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
                 "Kink_Interval_ms": kink_intervals_ms,
                 "Kink_Ratio": kink_ratios,
                 "Kink Height": kink_heights,
+                "Kink_Slope_dVdt": kink_slopes,
                 "ISI_ms": ([np.nan] + isi_ms.tolist())
             }
                 
@@ -1016,6 +1027,7 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
             kink_intervals_arr = np.array(kink_intervals_ms)
             kink_ratios_arr = np.array(kink_ratios)
             kink_heights_arr = np.array(kink_heights)
+            kink_slopes_arr = np.array(kink_slopes)
 
             pct_spikes_with_kink = (
                 np.nansum(kink_count_arr > 0) / len(kink_count_arr) * 100
@@ -1037,6 +1049,12 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
             avg_kink_height = (
                 np.nanmean(kink_heights_arr)
                 if np.isfinite(kink_heights_arr).any()
+                else np.nan
+            )
+
+            avg_kink_slope = (
+                np.nanmean(kink_slopes_arr)
+                if np.isfinite(kink_slopes_arr).any()
                 else np.nan
             )
                 
@@ -1064,6 +1082,7 @@ def run_spike_detection(df, df_pA, df_analysis, fs, bundle_path, pA_was_replaced
                     "avg_kink_interval_ms": avg_kink_interval_ms,
                     "avg_kink_ratio": avg_kink_ratio,
                     "avg_kink_height_dVdt": avg_kink_height,
+                    "avg_kink_slope_dVdt": avg_kink_slope,
                     "spike_frequency_Hz": len(peak_voltages) / (sweep_t_max - sweep_t_min),
                     "mean_isi_ms": mean_isi_ms,
                     "cv_isi": cv_isi,

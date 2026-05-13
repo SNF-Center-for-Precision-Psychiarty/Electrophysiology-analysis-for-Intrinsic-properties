@@ -76,9 +76,12 @@ for i, peak in enumerate(peaks):
     thr_rel      = int(below[0])
     threshold_idx = w1_start + thr_rel
 
-    kink_dvdt = dvdt_up[thr_rel:up_rel + 1]
-    kink_t    = t_up[thr_rel:up_rel + 1]
-    kink_v    = v_up[thr_rel:up_rel + 1]
+    ks_pts = np.where(dvdt_up[thr_rel:] >= KINK_RATIO_THRESHOLD * max_dvdt)[0]
+    ks_rel = thr_rel + int(ks_pts[0]) if len(ks_pts) > 0 else thr_rel
+
+    kink_dvdt = dvdt_up[ks_rel:up_rel + 1]
+    kink_t    = t_up[ks_rel:up_rel + 1]
+    kink_v    = v_up[ks_rel:up_rel + 1]
 
     result = measure_kink_metrics(kink_dvdt, kink_t, threshold_idx=0)
     kink_detected = result['num_kinks'] > 0

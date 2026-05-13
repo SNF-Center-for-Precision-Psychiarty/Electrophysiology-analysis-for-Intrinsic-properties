@@ -7,7 +7,6 @@ ratio, depth, and interval.
 """
 
 import numpy as np
-from scipy.signal import peak_widths
 import matplotlib.pyplot as plt
 from pathlib import Path
 
@@ -39,6 +38,7 @@ def measure_kink_metrics(dvdt_array, times_array, threshold_idx, debug=False):
         'kink_interval_ms': np.nan,
         'kink_ratio': np.nan,
         'kink_height_dvdt': np.nan,
+        'kink_slope_dvdt': np.nan,
         'kink_idx': None,
     }
 
@@ -125,7 +125,7 @@ def measure_kink_metrics(dvdt_array, times_array, threshold_idx, debug=False):
         if debug:
             print(f"    [KINK] FAIL depth: {depth_ratio:.3f} < {KINK_DEPTH_RATIO_THRESHOLD}")
         return result
-    if kink_interval_ms < KINK_MIN_INTERVAL_MS:
+    if kink_interval_ms < KINK_MIN_INTERVAL_MS - 1e-9:
         if debug:
             print(f"    [KINK] FAIL interval: {kink_interval_ms:.3f}ms < {KINK_MIN_INTERVAL_MS}ms")
         return result
@@ -133,11 +133,17 @@ def measure_kink_metrics(dvdt_array, times_array, threshold_idx, debug=False):
     if debug:
         print("    [KINK] KINK DETECTED")
 
+    # Slope of dV/dt from threshold to kink (rising edge, mV/ms²)
+    t_rise   = (times_array[threshold_idx:kink_idx + 1] - times_array[threshold_idx]) * 1000.0
+    dv_rise  = dvdt_array[threshold_idx:kink_idx + 1]
+    kink_slope = float(np.polyfit(t_rise, dv_rise, 1)[0]) if len(t_rise) >= 2 else np.nan
+
     result.update({
         'num_kinks': 1,
         'kink_interval_ms': kink_interval_ms,
         'kink_ratio': kink_ratio,
         'kink_height_dvdt': kink_dvdt_val,
+        'kink_slope_dvdt': kink_slope,
         'kink_idx': kink_idx,
     })
 
@@ -202,6 +208,7 @@ def measure_kink_for_spike(voltages, times, dvdt, debug=False):
             'kink_interval_ms': np.nan,
             'kink_ratio': np.nan,
             'kink_height_dvdt': np.nan,
+            'kink_slope_dvdt': np.nan,
             'kink_idx': None
         }
 
@@ -217,26 +224,28 @@ def plot_kink_diagnostics(
     upstroke_idx,
     peak_idx,
     output_dir,
-    spike_id
+    spike_id,
+    search_start_idx=None,
 ):
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Only plot from threshold to upstroke (+ small margin)
+    # Plot from threshold (not search start) so the excluded region is visible
     w_start = threshold_idx
     w_end = upstroke_idx + int(0.5 * (upstroke_idx - threshold_idx))
     w_end = min(w_end, len(voltages) - 1)
 
-    time_window   = times[w_start:w_end + 1]
+    time_window    = times[w_start:w_end + 1]
     voltage_window = voltages[w_start:w_end + 1]
 
     time_rel = (time_window - time_window[0]) * 1000  # ms, relative to threshold
 
-    threshold_local = 0
-    kink_local      = kink_idx - w_start
-    upstroke_local  = upstroke_idx - w_start
-    peak_local      = peak_idx - w_start
+    threshold_local   = 0
+    kink_local        = kink_idx - w_start
+    upstroke_local    = upstroke_idx - w_start
+    peak_local        = peak_idx - w_start
+    search_start_local = (search_start_idx - w_start) if search_start_idx is not None else None
 
     if kink_local < 0 or kink_local >= len(time_rel):
         kink_local = max(0, min(kink_local, len(time_rel) - 1))
@@ -244,15 +253,31 @@ def plot_kink_diagnostics(
         upstroke_local = max(0, min(upstroke_local, len(time_rel) - 1))
     if peak_local < 0 or peak_local >= len(time_rel):
         peak_local = None
+    if search_start_local is not None:
+        if search_start_local < 0 or search_start_local >= len(time_rel):
+            search_start_local = None
 
     dvdt = np.gradient(voltage_window, time_window) * 1000
 
     fig, axes = plt.subplots(2, 1, figsize=(8, 6), sharex=True)
 
+    # Shading: grey = excluded region (threshold → search start), yellow = search window
+    span_start_local = search_start_local if search_start_local is not None else threshold_local
+    if search_start_local is not None and search_start_local > threshold_local:
+        for ax in axes:
+            ax.axvspan(time_rel[threshold_local], time_rel[search_start_local],
+                       alpha=0.08, color='grey')
+    for ax in axes:
+        ax.axvspan(time_rel[span_start_local], time_rel[upstroke_local],
+                   alpha=0.12, color='yellow')
+
     # --- Top: Voltage ---
     axes[0].plot(time_rel, voltage_window, 'k-', linewidth=1.5, label='Voltage')
     axes[0].scatter(time_rel[threshold_local], voltage_window[threshold_local],
-                    s=100, color='green', zorder=5, label='Threshold', marker='o')
+                    s=100, color='green', zorder=5, label='Threshold (5%)', marker='o')
+    if search_start_local is not None:
+        axes[0].scatter(time_rel[search_start_local], voltage_window[search_start_local],
+                        s=100, color='cyan', zorder=5, label='Search start (25%)', marker='D')
     axes[0].scatter(time_rel[kink_local], voltage_window[kink_local],
                     s=100, color='orange', zorder=5, label='Kink', marker='s')
     axes[0].scatter(time_rel[upstroke_local], voltage_window[upstroke_local],
@@ -260,8 +285,6 @@ def plot_kink_diagnostics(
     if peak_local is not None and 0 <= peak_local < len(time_rel):
         axes[0].scatter(time_rel[peak_local], voltage_window[peak_local],
                         s=100, color='blue', zorder=5, label='Peak', marker='D')
-    axes[0].axvspan(time_rel[threshold_local], time_rel[upstroke_local],
-                    alpha=0.1, color='yellow', label='Kink search window')
     axes[0].set_ylabel('Voltage (mV)', fontsize=11, fontweight='bold')
     axes[0].set_title(f'Kink Detection: {spike_id} (Threshold→Upstroke)', fontsize=12, fontweight='bold')
     axes[0].legend(loc='best', fontsize=9)
@@ -269,27 +292,23 @@ def plot_kink_diagnostics(
 
     # --- Bottom: dV/dt ---
     axes[1].plot(time_rel, dvdt, color='purple', linewidth=1.5, label='dV/dt')
+    if search_start_local is not None:
+        axes[1].scatter(time_rel[search_start_local], dvdt[search_start_local],
+                        s=100, color='cyan', zorder=5, marker='D')
     axes[1].scatter(time_rel[kink_local], dvdt[kink_local],
                     s=100, color='orange', zorder=5, marker='s')
     axes[1].scatter(time_rel[upstroke_local], dvdt[upstroke_local],
                     s=100, color='red', zorder=5, marker='^')
 
-    try:
-        from scipy.signal import peak_widths as _pw
-        if 0 < kink_local < len(dvdt) - 1:
-            widths, width_height, left_idx, right_idx = _pw(dvdt, [kink_local], rel_height=0.5)
-            li, ri = int(left_idx[0]), int(right_idx[0])
-            if 0 <= li < len(time_rel) and 0 <= ri < len(time_rel):
-                axes[1].hlines(width_height[0], time_rel[li], time_rel[ri],
-                               colors='cyan', linewidth=2.5, linestyle='--',
-                               label=f'Width @ 50% = {widths[0] * (time_window[1] - time_window[0]) * 1000:.3f} ms')
-                axes[1].scatter([time_rel[li], time_rel[ri]], [width_height[0], width_height[0]],
-                                s=80, color='cyan', zorder=6, marker='|')
-    except Exception:
-        pass
-
-    axes[1].axvspan(time_rel[threshold_local], time_rel[upstroke_local],
-                    alpha=0.1, color='yellow')
+    fit_start = search_start_local if search_start_local is not None else threshold_local
+    if fit_start < kink_local < len(dvdt):
+        t_fit  = time_rel[fit_start:kink_local + 1]
+        dv_fit = dvdt[fit_start:kink_local + 1]
+        if len(t_fit) >= 2:
+            coeffs   = np.polyfit(t_fit, dv_fit, 1)
+            fit_line = np.polyval(coeffs, t_fit)
+            axes[1].plot(t_fit, fit_line, 'r--', lw=2,
+                         label=f'Slope = {coeffs[0]:.3g} mV/ms²')
     axes[1].set_ylabel('dV/dt (mV/ms)', fontsize=11, fontweight='bold')
     axes[1].set_xlabel('Time relative to threshold (ms)', fontsize=11, fontweight='bold')
     axes[1].grid(True, alpha=0.3)
