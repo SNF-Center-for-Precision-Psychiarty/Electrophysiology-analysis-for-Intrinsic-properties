@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Get-ChildItem -Path \"Z:\\\\Manos\\\\SNF_Center Data - Manos\\\\2. Electrophysiology\\\\SNF_Center\\\\Human_dataR\" -Directory)",
+      "Bash(Select-Object -First 5)",
+      "Bash(timeout 30 find \"Z:/Manos/SNF_Center Data - Manos/2. Electrophysiology/SNF_Center/Human_dataR\" -maxdepth 5 -name \"manifest.json\")",
+      "Bash(python3)",
+      "Bash(Select-String -Path \"k:\\\\abf_nwb_pipeline\\\\_kink_patch_all.py\" -Pattern \"shutil|rmtree|_update_analysis|_update_ap_analysis|Wipe all kink\")",
+      "Bash(Select-Object LineNumber, Line)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Bash(python _export_feature_tables.py)"
+    ]
+  }
+}

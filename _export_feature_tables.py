@@ -93,13 +93,16 @@ SECTIONS = [
         ],
     },
     {
-        "name":    "Resting Membrane\nProperties",
-        "light":   "#D1F2EB",
-        "dark":    "#17A589",
-        "summary": "Baseline cell state prior to stimulation",
+        "name":    "Passive &\nSubthreshold Properties",
+        "light":   "#FADBD8",
+        "dark":    "#C0392B",
+        "summary": "Baseline state and passive membrane responses",
         "features": [
-            ("Resting membrane potential",
-             "Average baseline voltage in the 100 ms pre-stimulus window"),
+            ("Resting membrane potential",  "Average baseline voltage in the 100 ms pre-stimulus window"),
+            ("Input resistance",            "Slope of I-V curve on zero-spike sweeps (mV/pA = MOhm)"),
+            ("Sag voltage",                 "Absolute voltage recovery during hyperpolarization: V_peak - V_steady (mV)"),
+            ("Sag ratio",                   "Fraction of hyperpolarization recovered: (V_peak - V_steady) / (V_peak - V_rest)"),
+            ("Peak hyperpolarization",      "Maximum voltage drop below rest during negative current step (mV)"),
         ],
     },
 ]
