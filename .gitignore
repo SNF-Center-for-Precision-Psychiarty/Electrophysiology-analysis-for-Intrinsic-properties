@@ -8,6 +8,10 @@
 *.jpg
 *.jpeg
 
+# Exceptions: committed reference outputs
+!feature_table_detailed.png
+!feature_table_summary.png
+
 # Pipeline outputs
 bundles/
 data/
